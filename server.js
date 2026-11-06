@@ -29,7 +29,7 @@ if (!SETUP_CODE || SETUP_CODE.length < 12 || !SESSION_SECRET || SESSION_SECRET.l
 }
 fs.mkdirSync(PROOF_DIR, { recursive: true });
 function emptyState() {
-  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], audit: [] };
+  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], messages: [], messageReactions: [], audit: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
 if (!db.mvpCrown || typeof db.mvpCrown !== 'object' || Array.isArray(db.mvpCrown)) db.mvpCrown = null;
@@ -112,6 +112,12 @@ function validDay(day) {
   return day;
 }
 const REACTION_EMOJIS = ['🔥','👏','💪','❤️','🏆'];
+const MESSAGE_EMOJIS = ['❤️','😂','🔥','👏','💪','💎'];
+const GIPHY_KEY = process.env.GYMCLO_GIPHY_API_KEY || '';
+function gifId(value) { if (!value) return ''; const x=String(value).trim(); const match=/^https:\/\/(?:www\.)?giphy\.com\/(?:gifs\/(?:[a-z0-9-]+-)?|embed\/)([A-Za-z0-9]+)(?:[/?#].*)?$/i.exec(x) || /^https:\/\/media\.giphy\.com\/media\/([A-Za-z0-9]+)\/giphy\.gif(?:[?#].*)?$/i.exec(x); if(!match)fail('Use a valid GIPHY GIF link'); return match[1]; }
+function messageText(text) { if (typeof text!=='string' || text.length>1000)fail('Message must be under 1,000 characters'); return text.trim(); }
+function publicMessages(viewerId) {return db.messages.slice(-150).reverse().map(m=>({id:m.id,profileId:m.profileId,parentId:m.parentId||null,text:m.text,hasImage:!!m.image,gifId:m.gifId||'',createdAt:m.createdAt,editedAt:m.editedAt||null,reactions:MESSAGE_EMOJIS.map(emoji=>({emoji,count:db.messageReactions.filter(r=>r.messageId===m.id&&r.emoji===emoji).length})),myReaction:db.messageReactions.find(r=>r.messageId===m.id&&r.profileId===viewerId)?.emoji||''}));}
+
 function published(c) { return !!(c && c.shareToFeed === true && c.status === 'approved' && c.hasProof && !c.adminAdded); }
 function feedFor(viewerId) {
   return db.checkins.filter(published).sort((a,b) => b.createdAt-a.createdAt).slice(0,60).map(c => ({
@@ -235,9 +241,9 @@ async function route(req, res) {
       createdAt:c.createdAt,hasProof:false,adminAdded:!!c.adminAdded
     });
     return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
-      wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:''}, defaults:db.defaults,
+      wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:'',textColor:'default'}, defaults:db.defaults,
       rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
-      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),jukebox:db.jukebox });
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),messages:publicMessages(me.id),giphyEnabled:!!GIPHY_KEY,jukebox:db.jukebox });
   }
   const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
   if (req.method === 'GET' && feedImage) {
@@ -250,6 +256,9 @@ async function route(req, res) {
       'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});
     return fs.createReadStream(file).pipe(res);
   }
+  const messageImage=/^\/api\/messages\/([a-f0-9-]+)\/image$/.exec(uri);
+  if(req.method==='GET'&&messageImage){auth(req);const m=db.messages.find(x=>x.id===messageImage[1]);if(!m||!m.image)fail('Image unavailable',404);const pic=photoData(m.image,550000);res.writeHead(200,{'Content-Type':pic.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'});return res.end(pic.data);}
+  if (req.method==='GET' && uri==='/api/giphy/search') {auth(req);if(!GIPHY_KEY)fail('GIPHY search is not configured',503);const query=String(u.searchParams.get('q')||'').trim().slice(0,50);if(!query)fail('Enter a search');const upstream=new URL('https://api.giphy.com/v1/gifs/search');upstream.searchParams.set('api_key',GIPHY_KEY);upstream.searchParams.set('q',query);upstream.searchParams.set('limit','12');upstream.searchParams.set('rating','pg');const response=await fetch(upstream,{signal:AbortSignal.timeout(7000)});if(!response.ok)fail('GIPHY search unavailable',502);const data=await response.json();return send(res,200,{gifs:(data.data||[]).map(x=>({id:x.id,url:x.images?.fixed_width?.url||''})).filter(x=>/^[A-Za-z0-9]+$/.test(x.id)).slice(0,12)});}
   if (req.method === 'GET' && uri === '/api/jukebox') { auth(req); return send(res,200,{jukebox:db.jukebox}); }
   if (req.method === 'GET' && uri === '/api/feed') { const me=auth(req);return send(res,200,{feed:feedFor(me.id)}); }
 
@@ -297,7 +306,7 @@ async function route(req, res) {
     const me=auth(req),theme=String(b.theme||'ember'),dim=Number(b.dim);
     if (!['ember','oxide','slate','noir'].includes(theme) || !Number.isFinite(dim) || dim<0 || dim>0.7) fail('Invalid wallpaper settings');
     const photo=b.photo ? photoData(b.photo, 550000).value : '';
-    me.wallpaper={theme,dim,photo};persist();return send(res,200,{ok:true});
+    const textColor=String(b.textColor||'default');if(!['default','rose','ice','mint','gold','lavender','warm'].includes(textColor))fail('Invalid text colour');me.wallpaper={theme,dim,photo,textColor};persist();return send(res,200,{ok:true});
   }
   if (req.method === 'POST' && uri === '/api/jukebox') {
     const user = auth(req);
@@ -356,6 +365,36 @@ async function route(req, res) {
     if (who.id!==p.id) admin(req); // Other people's profiles require the unlocked admin PIN.
     p.name=checkName(b.name);
     if (b.avatar !== undefined && b.avatar !== p.avatar) p.avatar=b.avatar ? photoData(b.avatar).value : '';
+    persist();return send(res,200,{ok:true});
+  }
+  if (req.method === 'POST' && uri === '/api/messages') {
+    const who=auth(req),body=messageText(b.text),parentId=b.parentId||null, gif=gifId(b.gifUrl||'');
+    const parent=parentId?db.messages.find(m=>m.id===parentId):null;
+    if(parentId&&!parent)fail('Original message not found',404);
+    if(parent&&parent.parentId)fail('Reply to the original post instead');
+    const image=b.image?photoData(b.image,550000).value:'';
+    if(!body&&!image&&!gif)fail('Write a message or attach an image/GIF');
+    if(db.messages.length>=300)fail('Message board is full; contact the admin');
+    const now=Date.now(), recent=db.messages.filter(m=>m.profileId===who.id&&now-m.createdAt<60000).length;
+    if(recent>=8)fail('Too many messages. Try again in a minute',429);
+    db.messages.push({id:id(),profileId:who.id,parentId,text:body,image,gifId:gif,createdAt:now,editedAt:null});persist();return send(res,200,{ok:true});
+  }
+  const messageEdit=/^\/api\/messages\/([a-f0-9-]+)$/.exec(uri);
+  if(messageEdit&&req.method==='PATCH'){
+    const who=auth(req),m=db.messages.find(x=>x.id===messageEdit[1]);if(!m)fail('Message not found',404);
+    if(m.profileId!==who.id)fail('You can only edit your own messages',403);
+    const body=messageText(b.text),gif=gifId(b.gifUrl||'');
+    const image=b.image===undefined?m.image:(b.image?photoData(b.image,550000).value:'');
+    if(!body&&!image&&!gif)fail('Message cannot be empty');
+    m.text=body;m.image=image;m.gifId=gif;m.editedAt=Date.now();persist();return send(res,200,{ok:true});
+  }
+  const messageReact=/^\/api\/messages\/([a-f0-9-]+)\/react$/.exec(uri);
+  if(messageReact&&req.method==='POST'){
+    const who=auth(req),m=db.messages.find(x=>x.id===messageReact[1]);if(!m)fail('Message not found',404);
+    if(!MESSAGE_EMOJIS.includes(b.emoji))fail('Invalid reaction');
+    const old=db.messageReactions.find(x=>x.messageId===m.id&&x.profileId===who.id);
+    db.messageReactions=db.messageReactions.filter(x=>!(x.messageId===m.id&&x.profileId===who.id));
+    if(old?.emoji!==b.emoji)db.messageReactions.push({messageId:m.id,profileId:who.id,emoji:b.emoji});
     persist();return send(res,200,{ok:true});
   }
   if (req.method === 'POST' && uri === '/api/checkins') {
