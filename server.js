@@ -262,6 +262,21 @@ async function route(req, res) {
   if (req.method === 'GET' && uri === '/api/jukebox') { auth(req); return send(res,200,{jukebox:db.jukebox}); }
   if (req.method === 'GET' && uri === '/api/feed') { const me=auth(req);return send(res,200,{feed:feedFor(me.id)}); }
 
+  // Only an authenticated message author can remove a chat post or reply.
+  const messageDelete=/^\/api\/messages\/([a-f0-9-]+)$/.exec(uri);
+  if (req.method==='DELETE' && messageDelete) {
+    validateOrigin(req);
+    const who=auth(req);
+    const message=db.messages.find(m=>m.id===messageDelete[1]);
+    if (!message) fail('Message not found',404);
+    if (message.profileId!==who.id) fail('You can only delete your own posts',403);
+    // Deleting a parent also removes its replies and their reactions.
+    const removed=new Set([message.id]);
+    if (!message.parentId) db.messages.filter(m=>m.parentId===message.id).forEach(m=>removed.add(m.id));
+    db.messages=db.messages.filter(m=>!removed.has(m.id));
+    db.messageReactions=db.messageReactions.filter(r=>!removed.has(r.messageId));
+    persist();return send(res,200,{ok:true,deleted:removed.size});
+  }
   if (!['POST','PATCH'].includes(req.method)) fail('Method not allowed', 405);
   validateOrigin(req);
   const b = await bodyJson(req);
