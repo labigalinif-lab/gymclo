@@ -32,6 +32,7 @@ function emptyState() {
   return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], audit: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
+if (!db.jukebox || typeof db.jukebox !== 'object' || Array.isArray(db.jukebox)) db.jukebox = {url:'',title:'',selectedBy:null,updatedAt:0};
 for (const [k, v] of Object.entries(emptyState())) if (!Array.isArray(db[k])) db[k] = v;
 function persist() {
   const temporary = DB_FILE + '.tmp';
@@ -94,10 +95,14 @@ function monthWeeks(month) {
   return dates;
 }
 function monthTarget(month) { return db.rules.find(x => x.month === month)?.target || 4; }
+function activeCheckins(profileId, week) {
+  return db.checkins.filter(c => c.profileId === profileId && c.week === week && !['rejected','deleted'].includes(c.status));
+}
+function attendanceDays(profileId, week) { return new Set(activeCheckins(profileId, week).map(c => c.day)).size; }
 function eligibleForMvp(profileId, start, today) {
   if (cycleStart(start) !== start || addDays(start, 27) >= today) return false;
   return Array.from({length:4}, (_, i) => addDays(start, i * 7)).every(week =>
-    db.checkins.filter(x => x.profileId === profileId && x.week === week && x.status !== 'rejected').length >= cycleTarget(week));
+    attendanceDays(profileId, week) >= cycleTarget(week));
 }
 function validDay(day) {
   if (typeof day !== 'string' || !/^20\d{2}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(day) ||
@@ -224,14 +229,14 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && uri === '/api/state') {
     const me = auth(req);
-    const checkins = db.checkins.map(c => me.isAdmin || me.id === c.profileId ? c : {
+    const checkins = db.checkins.filter(c => c.status !== 'deleted').map(c => me.isAdmin || me.id === c.profileId ? c : {
       id:c.id,profileId:c.profileId,day:c.day,week:c.week,kind:c.kind,status:c.status,
       createdAt:c.createdAt,hasProof:false,adminAdded:!!c.adminAdded
     });
     return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
       wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:''}, defaults:db.defaults,
       rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
-      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,feed:feedFor(me.id) });
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,feed:feedFor(me.id),jukebox:db.jukebox });
   }
   const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
   if (req.method === 'GET' && feedImage) {
@@ -244,6 +249,7 @@ async function route(req, res) {
       'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});
     return fs.createReadStream(file).pipe(res);
   }
+  if (req.method === 'GET' && uri === '/api/jukebox') { auth(req); return send(res,200,{jukebox:db.jukebox}); }
   if (req.method === 'GET' && uri === '/api/feed') { const me=auth(req);return send(res,200,{feed:feedFor(me.id)}); }
 
   if (!['POST','PATCH'].includes(req.method)) fail('Method not allowed', 405);
@@ -292,11 +298,35 @@ async function route(req, res) {
     const photo=b.photo ? photoData(b.photo, 550000).value : '';
     me.wallpaper={theme,dim,photo};persist();return send(res,200,{ok:true});
   }
+  if (req.method === 'POST' && uri === '/api/jukebox') {
+    const user = auth(req);
+    let url;
+    try { url = new URL(String(b.url || '').trim()); } catch { fail('Enter a valid SoundCloud track URL'); }
+    if (url.protocol !== 'https:' || !['soundcloud.com','www.soundcloud.com','m.soundcloud.com'].includes(url.hostname) ||
+        url.pathname.split('/').filter(Boolean).length < 2 || url.toString().length > 400)
+      fail('Paste a public SoundCloud track or playlist link');
+    // Restrict URLs to real SoundCloud pages. Never fetch user-supplied URLs on our server.
+    url.hash = '';
+    const title=typeof b.title==='string' && b.title.trim() ? b.title.trim().slice(0,120) :
+      decodeURIComponent(url.pathname.split('/').filter(Boolean).slice(-1)[0]).replace(/-/g,' ').slice(0,120);
+    db.jukebox={url:url.toString(),title,selectedBy:user.id,updatedAt:Date.now()};
+    persist();return send(res,200,{ok:true,jukebox:db.jukebox});
+  }
+  const deleteSession=/^\/api\/admin\/checkins\/([a-f0-9-]+)\/delete$/.exec(uri);
+  if (req.method === 'POST' && deleteSession) {
+    const who=admin(req),c=db.checkins.find(x=>x.id===deleteSession[1]);
+    if (!c) fail('Session not found',404);
+    if (c.status !== 'approved') fail('Only approved sessions can be removed',400);
+    c.status='deleted';c.deletedBy=who.id;c.deletedAt=Date.now();c.shareToFeed=false;
+    db.reactions=db.reactions.filter(r=>r.checkinId!==c.id);
+    db.audit.push({event:'approved-session-removed',checkinId:c.id,profileId:c.profileId,day:c.day,adminId:who.id,at:c.deletedAt});
+    persist();return send(res,200,{ok:true});
+  }
   if (req.method === 'POST' && uri === '/api/admin/checkins') {
     const who=admin(req),day=validDay(b.day),profile=db.profiles.find(p=>p.id===b.profileId);
     if (!profile) fail('Profile not found',404);
     if (day > londonDay()) fail('Cannot record a future session');
-    if (db.checkins.some(c=>c.profileId===profile.id && c.day===day)) fail('A session already exists for this member on that date');
+    if (db.checkins.filter(c=>c.profileId===profile.id && c.day===day && c.status!=='deleted').length >= 20) fail('Daily safety limit of 20 sessions reached');
     if (!['push','pull','legs','cardio','other'].includes(b.kind)) fail('Choose a valid workout type');
     if (typeof b.note !== 'string'||b.note.length>180) fail('Notes cannot exceed 180 characters');
     const checkin={id:id(),profileId:profile.id,day,week:monday(day),kind:b.kind,note:b.note,
@@ -329,7 +359,7 @@ async function route(req, res) {
   }
   if (req.method === 'POST' && uri === '/api/checkins') {
     const who=auth(req), day=londonDay();
-    if (db.checkins.some(x=>x.profileId===who.id && x.day===day)) fail('You have already logged today');
+    if (db.checkins.filter(x=>x.profileId===who.id && x.day===day && x.status!=='deleted').length >= 20) fail('Daily safety limit of 20 sessions reached');
     if (!['push','pull','legs','cardio','other'].includes(b.kind)) fail('Invalid workout type');
     if (typeof b.note !== 'string' || b.note.length>180) fail('Notes cannot exceed 180 characters');
     const photo=photoData(b.proof);
@@ -427,7 +457,7 @@ const server=http.createServer(async(req,res)=>{
   try {
     const proof=/^\/api\/checkins\/([a-f0-9-]+)\/proof$/.exec(new URL(req.url,'http://localhost').pathname);
     if(req.method==='GET'&&proof){
-      const me=auth(req);const c=db.checkins.find(x=>x.id===proof[1]);if(!c)fail('Workout not found',404);
+      const me=auth(req);const c=db.checkins.find(x=>x.id===proof[1]);if(!c||c.status==='deleted')fail('Workout not found',404);
       if (c.profileId!==me.id && !me.isAdmin && !published(c)) fail('This evidence is private',403);
       const file=path.join(PROOF_DIR,proof[1]+'.jpg');
       const photo=fs.existsSync(file)?`data:${c.proofMime||'image/jpeg'};base64,${fs.readFileSync(file).toString('base64')}`:'';
