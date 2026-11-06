@@ -6,13 +6,15 @@ const crypto = require('node:crypto');
 
 // Railway: mount a persistent Volume at /app/data. Never put credentials in GitHub.
 const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = process.env.GYMCLO_DATA_DIR || path.join(__dirname, 'data');
+const DATA_DIR = process.env.GYMCLO_DATA_DIR || (process.env.RAILWAY_ENVIRONMENT ? '/app/data' : path.join(__dirname, 'data'));
 const DB_FILE = path.join(DATA_DIR, 'gymclo.json');
 const PROOF_DIR = path.join(DATA_DIR, 'proofs');
 const SETUP_CODE = process.env.GYMCLO_SETUP_CODE || '';
 const SESSION_SECRET = process.env.GYMCLO_SESSION_SECRET || '';
 const COOKIE_NAME = 'gymclo_session';
 const SESSION_SECONDS = 7 * 24 * 3600;
+const ADMIN_PIN = process.env.GYMCLO_ADMIN_PIN || '';
+const ADMIN_SECONDS = 15 * 60;
 const PIN_ATTEMPTS = new Map();
 const DEFAULTS = [
   '40 bodyweight squats + 30-second plank',
@@ -28,7 +30,7 @@ if (!SETUP_CODE || SETUP_CODE.length < 12 || !SESSION_SECRET || SESSION_SECRET.l
 }
 fs.mkdirSync(PROOF_DIR, { recursive: true });
 function emptyState() {
-  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS };
+  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
 for (const [k, v] of Object.entries(emptyState())) if (!Array.isArray(db[k])) db[k] = v;
@@ -74,6 +76,8 @@ function monday(day) {
   d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
   return d.toISOString().slice(0, 10);
 }
+function cycleStart(day) { const anchor=Date.parse('2026-11-02T12:00:00Z');const week=Date.parse(monday(day)+'T12:00:00Z');return addDays('2026-11-02',Math.floor((week-anchor)/(28*86400000))*28); }
+function cycleTarget(day) {return db.cycleRules.find(x=>x.start===cycleStart(day))?.target||4;}
 function addDays(day, n) {
   const d = new Date(day + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0,10);
 }
@@ -94,7 +98,7 @@ function monthTarget(month) { return db.rules.find(x => x.month === month)?.targ
 function eligibleForMvp(profileId, month, today) {
   const weeks = monthWeeks(month);
   return !!weeks.length && weeks.every(week => addDays(week, 6) < today &&
-    db.checkins.filter(x => x.profileId === profileId && x.week === week && x.status !== 'rejected').length >= monthTarget(week.slice(0,7)));
+    db.checkins.filter(x => x.profileId === profileId && x.week === week && x.status !== 'rejected').length >= cycleTarget(week));
 }
 function cookie(req) {
   const all = String(req.headers.cookie || '').split(';').map(x => x.trim());
@@ -119,7 +123,16 @@ function currentUser(req) {
   } catch { return null; }
 }
 function auth(req) { const p = currentUser(req); if (!p) fail('Please sign in again', 401); return p; }
-function admin(req) { const p = auth(req); if (!p.isAdmin) fail('Admin access required', 403); return p; }
+function admin(req) {
+  const p=auth(req);
+  if (!p.isAdmin) fail('Admin access required',403);
+  const token=String(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith('gymclo_admin='))?.slice(13)||'';
+  const [stamp,sig]=token.split('.');
+  if (!stamp || !sig || !/^\d+$/.test(stamp) || Number(stamp)<Date.now()/1000 || Number(stamp)>Date.now()/1000+ADMIN_SECONDS) fail('Unlock admin with your PIN first',403);
+  const expected=crypto.createHmac('sha256',SESSION_SECRET).update(`${p.id}:${p.sessionVersion||0}:${stamp}`).digest('base64url');
+  if (!safeEqual(sig,expected)) fail('Unlock admin with your PIN first',403);
+  return p;
+}
 function setLogin(res, profile) {
   res.setHeader('Set-Cookie', `${COOKIE_NAME}=${sign(profile)}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_SECONDS}${process.env.NODE_ENV === 'production' || process.env.RAILWAY_ENVIRONMENT ? '; Secure' : ''}`);
 }
@@ -191,9 +204,12 @@ async function route(req, res) {
   const user = currentUser(req);
   if (req.method === 'GET' && uri === '/api/bootstrap')
     return send(res,200,{ setupRequired:db.profiles.length === 0, profiles:db.profiles.map(publicProfile), me:user?publicProfile(user):null, today:londonDay() });
+  if (req.method === 'GET' && uri === '/api/admin/status') {
+    try { admin(req); return send(res,200,{unlocked:true}); } catch {return send(res,200,{unlocked:false});}
+  }
   if (req.method === 'GET' && uri === '/api/state') {
     const me = auth(req);
-    return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(), defaults:db.defaults, rules:db.rules, checkins:db.checkins, done:db.done, proposals:db.proposals, proposalVotes:db.proposalVotes, mvpVotes:db.mvpVotes });
+    return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(), defaults:db.defaults, rules:db.rules, checkins:db.checkins, done:db.done, cycleRules:db.cycleRules, proposals:db.proposals, proposalVotes:db.proposalVotes, mvpVotes:db.mvpVotes });
   }
   if (!['POST','PATCH'].includes(req.method)) fail('Method not allowed', 405);
   validateOrigin(req);
@@ -220,7 +236,20 @@ async function route(req, res) {
     p.pinHash=hashPin(b.pin);p.claimed=true;delete p.claimCode;p.sessionVersion=(p.sessionVersion||0)+1;
     persist();clearPinRate(req,b.profileId);setLogin(res,p);return send(res,200,{ok:true});
   }
-  if (req.method === 'POST' && uri === '/api/logout') { clearLogin(res);return send(res,200,{ok:true}); }
+  if (req.method === 'POST' && uri === '/api/admin/unlock') {
+    const p=auth(req);if (!p.isAdmin) fail('Admin access required',403);
+    checkPinRate(req, 'admin:'+p.id);
+    // GYMCLO_ADMIN_PIN is configured in Railway (2002), never shipped to browser.
+    // Until configured, the owner's existing login PIN is used.
+    const valid=ADMIN_PIN ? safeEqual(String(b.pin), ADMIN_PIN) : pinMatches(b.pin,p.pinHash);
+    if (!valid) wrongPin(req,'admin:'+p.id);
+    clearPinRate(req,'admin:'+p.id);
+    const expiry=Math.floor(Date.now()/1000)+ADMIN_SECONDS;
+    const sig=crypto.createHmac('sha256',SESSION_SECRET).update(`${p.id}:${p.sessionVersion||0}:${expiry}`).digest('base64url');
+    res.setHeader('Set-Cookie',`gymclo_admin=${expiry}.${sig}; HttpOnly; SameSite=Strict; Path=/api/; Max-Age=${ADMIN_SECONDS}${process.env.RAILWAY_ENVIRONMENT?'; Secure':''}`);
+    return send(res,200,{ok:true});
+  }
+  if (req.method === 'POST' && uri === '/api/logout') { clearLogin(res);res.setHeader('Set-Cookie',[`${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,'gymclo_admin=; HttpOnly; SameSite=Strict; Path=/api/; Max-Age=0']);return send(res,200,{ok:true}); }
 
   if (req.method === 'POST' && uri === '/api/profiles') {
     admin(req);
@@ -272,6 +301,16 @@ async function route(req, res) {
     admin(req);const c=db.checkins.find(x=>x.id===review[1]);if(!c)fail('Workout not found',404);
     if (!['approved','rejected','pending'].includes(b.status))fail('Invalid status');
     c.status=b.status;persist();return send(res,200,{ok:true});
+  }
+  if (req.method==='POST' && uri==='/api/cycle-rules') {
+    admin(req);
+    if (typeof b.start !== 'string' || !/^20\d{2}-\d{2}-\d{2}$/.test(b.start) || !Number.isFinite(Date.parse(b.start)) || cycleStart(b.start)!==b.start) fail('Invalid four-week cycle start');
+    const target=Number(b.target);
+    if (!Number.isInteger(target) || target<1 || target>7) fail('Weekly target must be 1–7');
+    if (!Array.isArray(b.forfeits) || b.forfeits.length!==4 || b.forfeits.some(f=>typeof f!=='string'||!f.trim()||f.length>180)) fail('Exactly four forfeits required');
+    db.cycleRules=db.cycleRules.filter(x=>x.start!==b.start);
+    db.cycleRules.push({start:b.start,target,forfeits:b.forfeits.map(x=>x.trim())});
+    persist(); return send(res,200,{ok:true});
   }
   if (req.method==='POST' && uri==='/api/rules') {
     admin(req);const month=checkMonth(b.month), target=Number(b.target);
