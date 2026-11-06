@@ -20,8 +20,7 @@ const DEFAULTS = [
   '40 bodyweight squats + 30-second plank',
   '60 alternating lunges + 60-second plank',
   '80 bodyweight squats + 90-second wall sit',
-  '15-minute brisk incline walk + 60 walking lunges',
-  '20-minute incline walk + 3 minutes total plank'
+  '15-minute brisk incline walk + 60 walking lunges'
 ];
 
 if (!SETUP_CODE || SETUP_CODE.length < 12 || !SESSION_SECRET || SESSION_SECRET.length < 32) {
@@ -30,7 +29,7 @@ if (!SETUP_CODE || SETUP_CODE.length < 12 || !SESSION_SECRET || SESSION_SECRET.l
 }
 fs.mkdirSync(PROOF_DIR, { recursive: true });
 function emptyState() {
-  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [] };
+  return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], audit: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
 for (const [k, v] of Object.entries(emptyState())) if (!Array.isArray(db[k])) db[k] = v;
@@ -95,11 +94,27 @@ function monthWeeks(month) {
   return dates;
 }
 function monthTarget(month) { return db.rules.find(x => x.month === month)?.target || 4; }
-function eligibleForMvp(profileId, month, today) {
-  const weeks = monthWeeks(month);
-  return !!weeks.length && weeks.every(week => addDays(week, 6) < today &&
+function eligibleForMvp(profileId, start, today) {
+  if (cycleStart(start) !== start || addDays(start, 27) >= today) return false;
+  return Array.from({length:4}, (_, i) => addDays(start, i * 7)).every(week =>
     db.checkins.filter(x => x.profileId === profileId && x.week === week && x.status !== 'rejected').length >= cycleTarget(week));
 }
+function validDay(day) {
+  if (typeof day !== 'string' || !/^20\d{2}-(0[1-9]|1[0-2])-([0-2]\d|3[01])$/.test(day) ||
+      Number.isNaN(Date.parse(day + 'T12:00:00Z')) || new Date(day+'T12:00:00Z').toISOString().slice(0,10) !== day)
+    fail('Enter a valid date');
+  return day;
+}
+const REACTION_EMOJIS = ['🔥','👏','💪','❤️','🏆'];
+function published(c) { return !!(c && c.shareToFeed === true && c.status === 'approved' && c.hasProof && !c.adminAdded); }
+function feedFor(viewerId) {
+  return db.checkins.filter(published).sort((a,b) => b.createdAt-a.createdAt).slice(0,60).map(c => ({
+    id:c.id,profileId:c.profileId,day:c.day,kind:c.kind,note:c.note,createdAt:c.createdAt,
+    reactions:REACTION_EMOJIS.map(emoji=>({emoji,count:db.reactions.filter(r=>r.checkinId===c.id&&r.emoji===emoji).length})),
+    myReaction:db.reactions.find(r=>r.checkinId===c.id&&r.profileId===viewerId)?.emoji||''
+  }));
+}
+
 function cookie(req) {
   const all = String(req.headers.cookie || '').split(';').map(x => x.trim());
   const found = all.find(x => x.startsWith(COOKIE_NAME + '='));
@@ -186,7 +201,7 @@ function validateOrigin(req) {
   catch (e) { if (e.status) throw e; fail('Invalid request origin', 403); }
 }
 function validForfeits(a) {
-  if (!Array.isArray(a) || a.length !== 5 || a.some(x => typeof x !== 'string' || !x.trim() || x.length > 180)) fail('Provide five fitness forfeits (one for each week)');
+  if (!Array.isArray(a) || a.length !== 4 || a.some(x => typeof x !== 'string' || !x.trim() || x.length > 180)) fail('Provide exactly four fitness forfeits (one per week)');
   return a.map(x => x.trim());
 }
 const id = () => crypto.randomUUID();
@@ -209,8 +224,28 @@ async function route(req, res) {
   }
   if (req.method === 'GET' && uri === '/api/state') {
     const me = auth(req);
-    return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(), defaults:db.defaults, rules:db.rules, checkins:db.checkins, done:db.done, cycleRules:db.cycleRules, proposals:db.proposals, proposalVotes:db.proposalVotes, mvpVotes:db.mvpVotes });
+    const checkins = db.checkins.map(c => me.isAdmin || me.id === c.profileId ? c : {
+      id:c.id,profileId:c.profileId,day:c.day,week:c.week,kind:c.kind,status:c.status,
+      createdAt:c.createdAt,hasProof:false,adminAdded:!!c.adminAdded
+    });
+    return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
+      wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:''}, defaults:db.defaults,
+      rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,feed:feedFor(me.id) });
   }
+  const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
+  if (req.method === 'GET' && feedImage) {
+    auth(req);
+    const c=db.checkins.find(x=>x.id===feedImage[1]);
+    if (!published(c)) fail('Photo not available',404);
+    const file=path.join(PROOF_DIR,c.id+'.jpg');
+    if (!fs.existsSync(file)) fail('Photo not found',404);
+    res.writeHead(200,{'Content-Type':c.proofMime||'image/jpeg','Cache-Control':'private, no-store',
+      'X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});
+    return fs.createReadStream(file).pipe(res);
+  }
+  if (req.method === 'GET' && uri === '/api/feed') { const me=auth(req);return send(res,200,{feed:feedFor(me.id)}); }
+
   if (!['POST','PATCH'].includes(req.method)) fail('Method not allowed', 405);
   validateOrigin(req);
   const b = await bodyJson(req);
@@ -251,6 +286,25 @@ async function route(req, res) {
   }
   if (req.method === 'POST' && uri === '/api/logout') { clearLogin(res);res.setHeader('Set-Cookie',[`${COOKIE_NAME}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`,'gymclo_admin=; HttpOnly; SameSite=Strict; Path=/api/; Max-Age=0']);return send(res,200,{ok:true}); }
 
+  if (req.method === 'PATCH' && uri === '/api/me/wallpaper') {
+    const me=auth(req),theme=String(b.theme||'ember'),dim=Number(b.dim);
+    if (!['ember','oxide','slate','noir'].includes(theme) || !Number.isFinite(dim) || dim<0 || dim>0.7) fail('Invalid wallpaper settings');
+    const photo=b.photo ? photoData(b.photo, 550000).value : '';
+    me.wallpaper={theme,dim,photo};persist();return send(res,200,{ok:true});
+  }
+  if (req.method === 'POST' && uri === '/api/admin/checkins') {
+    const who=admin(req),day=validDay(b.day),profile=db.profiles.find(p=>p.id===b.profileId);
+    if (!profile) fail('Profile not found',404);
+    if (day > londonDay()) fail('Cannot record a future session');
+    if (db.checkins.some(c=>c.profileId===profile.id && c.day===day)) fail('A session already exists for this member on that date');
+    if (!['push','pull','legs','cardio','other'].includes(b.kind)) fail('Choose a valid workout type');
+    if (typeof b.note !== 'string'||b.note.length>180) fail('Notes cannot exceed 180 characters');
+    const checkin={id:id(),profileId:profile.id,day,week:monday(day),kind:b.kind,note:b.note,
+      status:'approved',createdAt:Date.now(),hasProof:false,adminAdded:true,shareToFeed:false,addedBy:who.id};
+    db.checkins.unshift(checkin);
+    db.audit.push({event:'admin-checkin-added',checkinId:checkin.id,profileId:profile.id,day,adminId:who.id,at:Date.now()});
+    persist();return send(res,200,{ok:true});
+  }
   if (req.method === 'POST' && uri === '/api/profiles') {
     admin(req);
     if (db.profiles.length >= 40) fail('Maximum of 40 profiles reached');
@@ -268,7 +322,7 @@ async function route(req, res) {
   const edit = /^\/api\/profiles\/([^/]+)$/.exec(uri);
   if (edit && req.method === 'PATCH') {
     const who=auth(req),p=db.profiles.find(x=>x.id===edit[1]);if(!p)fail('Profile not found',404);
-    if (!who.isAdmin && who.id!==p.id) fail('Only the owner or an admin can update this profile',403);
+    if (who.id!==p.id) admin(req); // Other people's profiles require the unlocked admin PIN.
     p.name=checkName(b.name);
     if (b.avatar !== undefined && b.avatar !== p.avatar) p.avatar=b.avatar ? photoData(b.avatar).value : '';
     persist();return send(res,200,{ok:true});
@@ -283,7 +337,28 @@ async function route(req, res) {
     const flagged=db.checkins.some(x=>x.proofHash===digest);
     const proofFile=path.join(PROOF_DIR, proofId + '.jpg');
     fs.writeFileSync(proofFile,photo.data,{mode:0o600});
-    db.checkins.unshift({id:proofId,profileId:who.id,day,week:monday(day),kind:b.kind,note:b.note,status:'pending',createdAt:Date.now(),hasProof:true,flagged,proofHash:digest,proofMime:photo.mime});
+    db.checkins.unshift({id:proofId,profileId:who.id,day,week:monday(day),kind:b.kind,note:b.note,status:'pending',createdAt:Date.now(),hasProof:true,flagged,proofHash:digest,proofMime:photo.mime,shareToFeed:b.shareToFeed===true});
+    persist();return send(res,200,{ok:true});
+  }
+  const visibility=/^\/api\/checkins\/([a-f0-9-]+)\/visibility$/.exec(uri);
+  if (visibility && req.method === 'POST') {
+    const me=auth(req),c=db.checkins.find(x=>x.id===visibility[1]);
+    if (!c) fail('Session not found',404);
+    if (c.profileId!==me.id) fail('Only the member can publish their own photo',403);
+    if (!c.hasProof || c.adminAdded) fail('This session has no publishable photo');
+    if (typeof b.visible !== 'boolean') fail('Invalid visibility');
+    c.shareToFeed=b.visible;
+    if (!b.visible) db.reactions=db.reactions.filter(x=>x.checkinId!==c.id);
+    persist();return send(res,200,{ok:true});
+  }
+  const react=/^\/api\/feed\/([a-f0-9-]+)\/react$/.exec(uri);
+  if (react && req.method === 'POST') {
+    const me=auth(req),c=db.checkins.find(x=>x.id===react[1]);
+    if (!published(c)) fail('This achievement is not published',404);
+    if (typeof b.emoji!=='string'||!REACTION_EMOJIS.includes(b.emoji)) fail('Invalid reaction');
+    const prior=db.reactions.find(r=>r.checkinId===c.id&&r.profileId===me.id);
+    db.reactions=db.reactions.filter(r=>!(r.checkinId===c.id&&r.profileId===me.id));
+    if (prior?.emoji!==b.emoji) db.reactions.push({checkinId:c.id,profileId:me.id,emoji:b.emoji});
     persist();return send(res,200,{ok:true});
   }
   const proof = /^\/api\/checkins\/([a-f0-9-]+)\/proof$/.exec(uri);
@@ -319,29 +394,31 @@ async function route(req, res) {
     db.rules=db.rules.filter(x=>x.month!==month);db.rules.push(rules);persist();return send(res,200,{ok:true});
   }
   if (req.method==='POST' && uri==='/api/proposals') {
-    const who=auth(req),month=checkMonth(b.month),title=String(b.title||'').trim();
+    const who=auth(req),title=String(b.title||'').trim();
     if (!title || title.length>64)fail('Title must be 1-64 characters');
-    if (month!==nextMonth(monday(londonDay()).slice(0,7)))fail('Proposals are for next month');
-    db.proposals.push({id:id(),profileId:who.id,createdAt:Date.now(),month,title,forfeits:validForfeits(b.forfeits)});
+    if (b.start!==addDays(cycleStart(londonDay()),28)) fail('Proposals must be for the next four-week cycle');
+    db.proposals.push({id:id(),profileId:who.id,createdAt:Date.now(),start:b.start,title,forfeits:validForfeits(b.forfeits)});
     persist();return send(res,200,{ok:true});
   }
   if (req.method==='POST' && uri==='/api/proposal-votes') {
     const who=auth(req),p=db.proposals.find(x=>x.id===b.proposalId);
-    if (!p||p.month!==nextMonth(monday(londonDay()).slice(0,7)))fail('Proposal unavailable');
-    db.proposalVotes=db.proposalVotes.filter(x=>!(x.month===p.month&&x.voterId===who.id));
-    db.proposalVotes.push({month:p.month,voterId:who.id,proposalId:p.id});persist();return send(res,200,{ok:true});
+    if (!p||p.start!==addDays(cycleStart(londonDay()),28))fail('Proposal unavailable');
+    db.proposalVotes=db.proposalVotes.filter(x=>!(x.start===p.start&&x.voterId===who.id));
+    db.proposalVotes.push({start:p.start,voterId:who.id,proposalId:p.id});persist();return send(res,200,{ok:true});
   }
   if (req.method==='POST' && uri==='/api/apply-proposal') {
     admin(req);const p=db.proposals.find(x=>x.id===b.proposalId);if(!p)fail('Proposal not found');
-    db.rules=db.rules.filter(x=>x.month!==p.month);
-    db.rules.push({month:p.month,target:4,forfeits:p.forfeits});persist();return send(res,200,{ok:true});
+    if (!p.start || cycleStart(p.start)!==p.start || !Array.isArray(p.forfeits) || p.forfeits.length!==4) fail('Only four-week proposals can be applied');
+    const target=db.cycleRules.find(x=>x.start===p.start)?.target||4;
+    db.cycleRules=db.cycleRules.filter(x=>x.start!==p.start);
+    db.cycleRules.push({start:p.start,target,forfeits:p.forfeits});persist();return send(res,200,{ok:true});
   }
   if (req.method==='POST' && uri==='/api/mvp-votes') {
-    const who=auth(req),month=checkMonth(b.month),candidate=db.profiles.find(x=>x.id===b.candidateId),today=londonDay();
-    if (month!==lastMonth(monday(today).slice(0,7)))fail('Only last month MVP voting is open');
-    if (!candidate || who.id===candidate.id || !eligibleForMvp(candidate.id,month,today))fail('Candidate is not eligible');
-    if (db.mvpVotes.some(x=>x.voterId===who.id&&x.month===month))fail('You have already voted');
-    db.mvpVotes.push({month,voterId:who.id,candidateId:candidate.id,createdAt:Date.now()});persist();return send(res,200,{ok:true});
+    const who=auth(req),start=b.start,candidate=db.profiles.find(x=>x.id===b.candidateId),today=londonDay();
+    if (start!==addDays(cycleStart(today),-28)) fail('Only the previous four-week cycle MVP voting is open');
+    if (!candidate || who.id===candidate.id || !eligibleForMvp(candidate.id,start,today))fail('Candidate is not eligible');
+    if (db.mvpVotes.some(x=>x.voterId===who.id&&x.start===start))fail('You have already voted');
+    db.mvpVotes.push({start,voterId:who.id,candidateId:candidate.id,createdAt:Date.now()});persist();return send(res,200,{ok:true});
   }
   fail('Unknown API endpoint',404);
 }
@@ -350,7 +427,8 @@ const server=http.createServer(async(req,res)=>{
   try {
     const proof=/^\/api\/checkins\/([a-f0-9-]+)\/proof$/.exec(new URL(req.url,'http://localhost').pathname);
     if(req.method==='GET'&&proof){
-      auth(req);const c=db.checkins.find(x=>x.id===proof[1]);if(!c)fail('Workout not found',404);
+      const me=auth(req);const c=db.checkins.find(x=>x.id===proof[1]);if(!c)fail('Workout not found',404);
+      if (c.profileId!==me.id && !me.isAdmin && !published(c)) fail('This evidence is private',403);
       const file=path.join(PROOF_DIR,proof[1]+'.jpg');
       const photo=fs.existsSync(file)?`data:${c.proofMime||'image/jpeg'};base64,${fs.readFileSync(file).toString('base64')}`:'';
       return send(res,200,{proof:photo});
