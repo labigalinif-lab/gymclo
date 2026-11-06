@@ -32,6 +32,7 @@ function emptyState() {
   return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], audit: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
+if (!db.mvpCrown || typeof db.mvpCrown !== 'object' || Array.isArray(db.mvpCrown)) db.mvpCrown = null;
 if (!db.jukebox || typeof db.jukebox !== 'object' || Array.isArray(db.jukebox)) db.jukebox = {url:'',title:'',selectedBy:null,updatedAt:0};
 for (const [k, v] of Object.entries(emptyState())) if (!Array.isArray(db[k])) db[k] = v;
 function persist() {
@@ -236,7 +237,7 @@ async function route(req, res) {
     return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
       wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:''}, defaults:db.defaults,
       rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
-      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,feed:feedFor(me.id),jukebox:db.jukebox });
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),jukebox:db.jukebox });
   }
   const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
   if (req.method === 'GET' && feedImage) {
@@ -443,12 +444,50 @@ async function route(req, res) {
     db.cycleRules=db.cycleRules.filter(x=>x.start!==p.start);
     db.cycleRules.push({start:p.start,target,forfeits:p.forfeits});persist();return send(res,200,{ok:true});
   }
+  // A manual crown is useful for bootstrapping a new crew or correcting exceptional outcomes.
+  // The title belongs to exactly one profile and persists until deliberately replaced.
+  if (req.method === 'POST' && uri === '/api/admin/mvp/crown') {
+    const who = admin(req);
+    const winner = db.profiles.find(p => p.id === b.profileId);
+    if (!winner) fail('Choose an existing member', 404);
+    db.mvpCrown = {profileId:winner.id, source:'admin', cycleStart:null, awardedAt:Date.now(), awardedBy:who.id};
+    db.audit.push({event:'mvp-crown-manual',profileId:winner.id,adminId:who.id,at:Date.now()});
+    persist(); return send(res,200,{ok:true,mvpCrown:db.mvpCrown});
+  }
+  // Finalize a completed challenge's vote. Existing crown survives when there are
+  // no votes or a tie; an admin can resolve a tie with the manual selector.
+  if (req.method === 'POST' && uri === '/api/admin/mvp/finalize') {
+    const who=admin(req),start=String(b.start||''),today=londonDay();
+    if (cycleStart(start)!==start || addDays(start,27)>=today) fail('The four-week challenge has not finished');
+    const votes=db.mvpVotes.filter(v=>v.start===start);
+    if (!votes.length) fail('No MVP votes to finalize');
+    const tally=new Map();
+    for(const v of votes) if(db.profiles.some(p=>p.id===v.candidateId)) tally.set(v.candidateId,(tally.get(v.candidateId)||0)+1);
+    const sorted=[...tally].sort((a,b)=>b[1]-a[1]);
+    if (!sorted.length) fail('No valid MVP votes');
+    if (sorted.length>1&&sorted[0][1]===sorted[1][1]) fail('MVP votes are tied. Select a winner manually in Admin.');
+    if (db.mvpCrown?.cycleStart && db.mvpCrown.cycleStart>start) fail('A newer MVP has already been crowned');
+    db.mvpCrown={profileId:sorted[0][0],source:'vote',cycleStart:start,awardedAt:Date.now(),awardedBy:who.id};
+    db.audit.push({event:'mvp-crown-voted',profileId:sorted[0][0],cycleStart:start,adminId:who.id,at:Date.now()});
+    persist();return send(res,200,{ok:true,mvpCrown:db.mvpCrown,voteCount:votes.length});
+  }
   if (req.method==='POST' && uri==='/api/mvp-votes') {
     const who=auth(req),start=b.start,candidate=db.profiles.find(x=>x.id===b.candidateId),today=londonDay();
     if (start!==addDays(cycleStart(today),-28)) fail('Only the previous four-week cycle MVP voting is open');
     if (!candidate || who.id===candidate.id || !eligibleForMvp(candidate.id,start,today))fail('Candidate is not eligible');
     if (db.mvpVotes.some(x=>x.voterId===who.id&&x.start===start))fail('You have already voted');
-    db.mvpVotes.push({start,voterId:who.id,candidateId:candidate.id,createdAt:Date.now()});persist();return send(res,200,{ok:true});
+    db.mvpVotes.push({start,voterId:who.id,candidateId:candidate.id,createdAt:Date.now()});
+    const voters=db.profiles.filter(p=>p.claimed);
+    const votes=db.mvpVotes.filter(v=>v.start===start);
+    if (voters.length>=2 && voters.every(p=>votes.some(v=>v.voterId===p.id)) && (!db.mvpCrown?.cycleStart || db.mvpCrown.cycleStart<=start)) {
+      const tally=new Map();for(const v of votes)tally.set(v.candidateId,(tally.get(v.candidateId)||0)+1);
+      const ranked=[...tally].sort((a,b)=>b[1]-a[1]);
+      if(ranked.length&&(!ranked[1]||ranked[0][1]>ranked[1][1])) {
+        db.mvpCrown={profileId:ranked[0][0],source:'vote',cycleStart:start,awardedAt:Date.now(),awardedBy:null};
+        db.audit.push({event:'mvp-crown-auto',profileId:ranked[0][0],cycleStart:start,at:Date.now()});
+      }
+    }
+    persist();return send(res,200,{ok:true});
   }
   fail('Unknown API endpoint',404);
 }
