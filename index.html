@@ -159,6 +159,78 @@
 @media(hover:none){.profile-tile:active .avatar{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.5),0 0 22px rgba(255,255,255,.35)}}
 @media(prefers-reduced-motion:reduce){.profile-tile,.profile-tile .avatar{transition:none!important}}
 
+
+/* 2026 modern Vita-inspired bubble selector. Labels have their own rows.
+   Deliberately override obsolete overlapping hexagon/rounded-square styles. */
+.entry-layer:has(.profile-gallery){justify-content:flex-start;padding-top:max(30px,env(safe-area-inset-top));padding-bottom:calc(24px + env(safe-area-inset-bottom));}
+.entry-layer:has(.profile-gallery) .entry-title{margin-top:22px}
+.profile-gallery{
+  --bubble:clamp(88px,23vw,120px);
+  display:grid;grid-template-columns:repeat(3,minmax(0,1fr));
+  column-gap:clamp(5px,2vw,16px);row-gap:clamp(16px,3.5vw,26px);
+  width:min(100%,510px);max-width:510px;max-height:min(59dvh,620px);
+  overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;
+  padding:22px 18px 36px;margin:22px auto 10px;
+  justify-items:center;align-items:start;align-content:start;
+  scroll-snap-type:none;scrollbar-width:thin;isolation:isolate;
+}
+.profile-tile,.profile-tile:nth-child(n+4),
+.profile-tile:nth-child(6n + 4),.profile-tile:nth-child(6n + 5),.profile-tile:nth-child(6n + 6){
+  position:relative;isolation:isolate;display:flex;flex-direction:column;align-items:center;
+  width:100%;max-width:155px;height:auto;min-height:0;
+  margin:0;gap:0;padding:0 0 2px;opacity:1;
+  border:0;background:transparent;color:var(--ink);
+  transform:none;filter:none;z-index:1;overflow:visible;
+  transition:transform .48s cubic-bezier(.2,.8,.2,1),opacity .3s ease;
+  animation:bubbleRise .65s cubic-bezier(.22,1,.36,1) both;
+  animation-delay:calc(var(--i)*40ms);
+}
+/* Stagger visually without pushing names into the row above. */
+.profile-tile:nth-child(6n+4),.profile-tile:nth-child(6n+5),.profile-tile:nth-child(6n+6){transform:translateX(11%)}
+.profile-tile .avatar,.profile-tile .avatar.xl{
+  position:relative;display:grid;place-items:center;overflow:hidden;
+  width:min(100%,var(--bubble));height:auto;aspect-ratio:1/1;flex:0 0 auto;
+  clip-path:none;border-radius:50%;font-size:clamp(25px,7vw,43px);
+  background:radial-gradient(circle at 32% 19%,#b76c83 0%,#85495f 38%,#2a1a2a 100%);
+  border:1px solid rgba(255,255,255,.46);
+  box-shadow:inset 0 2px 4px rgba(255,255,255,.28),inset 0 -13px 24px rgba(9,3,13,.42),0 15px 24px rgba(0,0,0,.38),0 0 0 2px rgba(255,255,255,.055);
+  transform:perspective(440px) rotateX(var(--bx,0deg)) rotateY(var(--by,0deg));
+  transition:transform .3s cubic-bezier(.16,1,.3,1),border-color .3s,box-shadow .38s,filter .3s;
+  will-change:transform;
+}
+.profile-tile .avatar img{position:relative;z-index:0;width:100%;height:100%;object-fit:cover;object-position:center;transform:scale(1.075) translate(var(--ix,0px),var(--iy,0px));transition:transform .35s ease}
+.profile-tile .avatar:after{
+  content:"";position:absolute;z-index:2;inset:0;border-radius:50%;pointer-events:none;
+  background:radial-gradient(ellipse 76% 38% at 32% 11%,rgba(255,255,255,.48),rgba(255,255,255,.12) 54%,transparent 100%),linear-gradient(155deg,rgba(255,255,255,.1),transparent 42%,rgba(0,0,0,.34) 94%);
+  box-shadow:inset 0 0 0 1px rgba(255,255,255,.2),inset -10px -12px 17px rgba(0,0,0,.24);
+}
+.profile-tile .profile-name{
+  display:block;width:100%;max-width:145px;min-width:0;
+  margin:10px 0 0;padding:0 2px;text-align:center;
+  font-size:12px;line-height:1.3;font-weight:790;letter-spacing:-.02em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  color:#fff;flex:0 0 auto;
+}
+.profile-tile .micro{display:block;font-size:10px;line-height:1.35;margin:3px 0 0;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis;color:#a9a0b0}
+.profile-tile:is(:hover,:focus-visible),.profile-tile.active:not(:hover):not(:focus-visible){opacity:1;filter:none}
+.profile-tile:is(:hover,:focus-visible){z-index:4;transform:scale(1.055)}
+.profile-tile:nth-child(6n+4):is(:hover,:focus-visible),.profile-tile:nth-child(6n+5):is(:hover,:focus-visible),.profile-tile:nth-child(6n+6):is(:hover,:focus-visible){transform:translateX(11%) scale(1.055)}
+.profile-tile:is(:hover,:focus-visible) .avatar,
+.profile-tile.active:not(:hover):not(:focus-visible) .avatar{
+  border-color:rgba(255,255,255,.94);
+  box-shadow:inset 0 2px 6px rgba(255,255,255,.4),inset 0 -12px 22px rgba(15,4,17,.35),0 0 0 2px rgba(255,255,255,.58),0 0 23px rgba(255,255,255,.4),0 0 48px rgba(255,255,255,.13),0 17px 30px rgba(0,0,0,.42);
+  filter:brightness(1.06);
+}
+.profile-tile:focus-visible{outline:none}.profile-tile:focus-visible .profile-name{text-decoration:underline;text-underline-offset:3px}
+.profile-gallery:has(.profile-tile:hover) .profile-tile:not(:hover){opacity:.78}
+@keyframes bubbleRise{from{opacity:0;translate:0 12px;scale:.94}to{opacity:1;translate:0 0;scale:1}}
+@media(max-width:440px){
+ .profile-gallery{--bubble:clamp(78px,26vw,103px);width:100%;padding:16px 5px 22px;column-gap:4px;row-gap:19px;max-height:min(57dvh,540px)}
+ .profile-tile{max-width:118px}.profile-tile .profile-name{font-size:11px}.profile-tile .micro{font-size:9px}
+}
+@media(hover:none){.profile-tile:active .avatar{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.6),0 0 26px rgba(255,255,255,.3)}}
+@media(prefers-reduced-motion:reduce){.profile-tile,.profile-tile .avatar,.profile-tile .avatar img{animation:none!important;transition:none!important;transform:none!important}}
+
 </style>
 <title>gymclo — your crew, your consistency.</title>
 </head>
@@ -324,7 +396,7 @@ function summaryText(){const w=activeWeek(),r=cycleRule(w),n=r.target;return `�
 function render(){setWallpaper();if(!S){nav.hidden=true;q('#music-mini').hidden=true;q('#music-deck').innerHTML='';scTrackKey='';scPlayer=null;scReady=false;return}let content=({home,log:logPage,crew:crewPage,feed:feedPage,forfeits:forfeitsPage,vote:votePage,admin:adminPage}[tab]||home)();el.innerHTML=content;drawNav();entry.hidden=true;nav.hidden=false;syncMusicDeck()}
 async function refresh(){S=await api('/api/state');pendingNotifyCount=S.me?.isAdmin?S.checkins.filter(c=>c.status==='pending'&&c.hasProof).length:null;B={...B,profiles:S.profiles,me:S.me,today:S.today};render()}
 async function boot(){setWallpaper();try{B=await api('/api/bootstrap');if(B.me){await refresh()}else{S=null;nav.hidden=true;renderEntry()}}catch(err){entry.hidden=false;entry.innerHTML=`<div class="entry-brand">gymclo<span class="red">.</span></div><div class="entry-title">Can't connect yet</div><p class="entry-sub">${esc(err.message)}. Check that the server is running.</p><button class="btn" style="margin-top:20px" data-act="reload">Try again</button>`}}
-function renderEntry(){entry.hidden=false;nav.hidden=true;el.innerHTML='';if(B.setupRequired)return renderSetup();if(pin.id)return renderPin();const p=B.profiles;entry.innerHTML=`<div class="entry-brand">gymclo<span class="red">.</span></div><div class="eyebrow" style="margin-top:11px">YOUR CREW. YOUR CONSISTENCY.</div><h1 class="entry-title">Who's showing up?</h1><p class="entry-sub">Choose your profile to continue</p><div class="profile-gallery" id="profileGallery" role="group" aria-label="Choose a Gymclo member">${p.map((m,i)=>`<button class="profile-tile ${i===selection?'active':''}" style="--i:${i}" data-act="chooseProfile" data-id="${m.id}" data-index="${i}">${avatar(m,'xl')}<span class="profile-name">${esc(m.name)}</span><span class="micro">${m.claimed?'4-digit PIN':'Invite required'}</span></button>`).join('')}</div><p class="selector-foot">Choose a tile · Every profile is personal</p><p class="micro" style="max-width:350px;text-align:center;margin-top:12px">New here? Ask your Gymclo admin to add your profile and send you a personal invitation code. You can then create your own four-digit PIN.</p>${demoMode?'<p class="support-note" style="margin-top:17px">DEMO ONLY · PIN for the sample profiles is <b>1234</b>.</p>':''}`;}
+function renderEntry(){entry.hidden=false;nav.hidden=true;el.innerHTML='';if(B.setupRequired)return renderSetup();if(pin.id)return renderPin();const p=B.profiles;entry.innerHTML=`<div class="entry-brand">gymclo<span class="red">.</span></div><div class="eyebrow" style="margin-top:11px">YOUR CREW. YOUR CONSISTENCY.</div><h1 class="entry-title">Who's showing up?</h1><p class="entry-sub">Choose your profile to continue</p><div class="profile-gallery" id="profileGallery" role="group" aria-label="Choose a Gymclo member">${p.map((m,i)=>`<button class="profile-tile ${i===selection?'active':''}" style="--i:${i}" data-act="chooseProfile" data-id="${m.id}" data-index="${i}">${avatar(m,'xl')}<span class="profile-name">${esc(m.name)}</span><span class="micro">${m.claimed?'4-digit PIN':'Invite required'}</span></button>`).join('')}</div><p class="selector-foot">Choose a bubble · Every profile is personal</p><p class="micro" style="max-width:350px;text-align:center;margin-top:12px">New here? Ask your Gymclo admin to add your profile and send you a personal invitation code. You can then create your own four-digit PIN.</p>${demoMode?'<p class="support-note" style="margin-top:17px">DEMO ONLY · PIN for the sample profiles is <b>1234</b>.</p>':''}`;}
 function renderSetup(){entry.innerHTML=`<div class="setup"><div class="entry-brand">gymclo<span class="red">.</span></div><div class="eyebrow" style="margin-top:16px">WELCOME TO YOUR NEW CLUB</div><h1 class="entry-title">Start the crew.</h1><p class="entry-sub">Create the admin profile first, then invite your friends. Only the creator needs the one-time setup code from the hosting dashboard.</p><form data-form="setup" style="margin-top:24px"><label class="field">Your name</label><input class="input" name="name" maxlength="28" required autocomplete="name" placeholder="Your name"><label class="field">One-time setup code</label><input class="input" name="setupCode" required placeholder="From hosting environment"><label class="field">Choose your four-digit PIN</label><input class="input" name="pin" inputmode="numeric" type="password" minlength="4" maxlength="4" pattern="[0-9]{4}" required placeholder="••••" autocomplete="new-password"><button class="btn full" style="margin-top:18px">Create gymclo</button></form></div>`}
 function chooseProfile(id,index){selection=Number(index)||0;const p=B.profiles.find(x=>x.id===id);if(!p)return;pin={id,mode:p.claimed?'enter':'claim',buf:'',first:'',claimCode:'',busy:false};
   if(window.matchMedia('(prefers-reduced-motion: reduce)').matches){renderPin();return}
@@ -352,6 +424,10 @@ document.addEventListener('click',async e=>{const btn=e.target.closest('[data-ac
 document.addEventListener('keydown',e=>{if(entry.hidden||!pin.id||pin.mode==='claim')return;if(/^\d$/.test(e.key)){e.preventDefault();digit(e.key)}else if(e.key==='Backspace'){e.preventDefault();digit('⌫')}else if(e.key==='Escape'){pin.id='';renderEntry()}});
 entry.addEventListener('keydown',e=>{if(pin.id)return;const tiles=qa('.profile-tile');if(!tiles.length)return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){selection=Math.max(0,Math.min(tiles.length-1,selection+(e.key==='ArrowRight'?1:-1)));qa('.profile-tile').forEach((t,i)=>t.classList.toggle('active',i===selection));tiles[selection].scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});e.preventDefault()}if(e.key==='Enter'&&e.target.closest('.profile-gallery')===null){tiles[selection]?.click()}});
 entry.addEventListener('mouseover',e=>{const t=e.target.closest('.profile-tile');if(t){qa('.profile-tile').forEach(b=>b.classList.toggle('active',b===t))}});
+// Bubble lens follows the pointer gently without changing selection/login flow.
+entry.addEventListener('pointermove',e=>{if(e.pointerType!=='mouse'||!window.matchMedia('(prefers-reduced-motion: no-preference)').matches)return;const tile=e.target.closest('.profile-tile');if(!tile)return;const bubble=tile.querySelector('.avatar');if(!bubble)return;const r=bubble.getBoundingClientRect();const x=Math.max(-1,Math.min(1,(e.clientX-r.left-r.width/2)/(r.width/2)));const y=Math.max(-1,Math.min(1,(e.clientY-r.top-r.height/2)/(r.height/2)));bubble.style.setProperty('--bx',`${(-y*8).toFixed(2)}deg`);bubble.style.setProperty('--by',`${(x*8).toFixed(2)}deg`);bubble.style.setProperty('--ix',`${(-x*3).toFixed(1)}px`);bubble.style.setProperty('--iy',`${(-y*3).toFixed(1)}px`)});
+entry.addEventListener('pointerout',e=>{const tile=e.target.closest('.profile-tile');if(!tile||tile.contains(e.relatedTarget))return;const bubble=tile.querySelector('.avatar');if(!bubble)return;for(const v of ['--bx','--by','--ix','--iy'])bubble.style.removeProperty(v)});
+
 modal.addEventListener('click',e=>{if(e.target===modal)closeModal()});
 document.addEventListener('input',e=>{if(e.target.id==='wallDim')document.documentElement.style.setProperty('--shade',+e.target.value)});
 document.addEventListener('change',async e=>{if(e.target.id==='radioFilter'){radioFilter=e.target.value;updateRadioHistory()}if(e.target.id==='wallInput'&&e.target.files[0]){try{const photo=await imageFile(e.target.files[0],1100,.7);await saveWallpaper({photo});toast('Wallpaper saved to your profile')}catch(err){toast(err.message)}}if(e.target.id==='checkinPhoto'&&e.target.files[0]){try{formPhoto=await imageFile(e.target.files[0],750,.62);const label=q('#proofUploadTitle');if(label)label.textContent='Evidence ready';const preview=q('#proofPreview');if(preview){preview.classList.add('has-image');preview.innerHTML=`<img alt="Selected workout evidence" src="${formPhoto}"><span class="grow micro">Photo attached · ready to submit</span><button type="button" class="proof-remove" data-act="clearProof">Remove</button>`}toast('Evidence ready to submit')}catch(err){formPhoto='';toast(err.message)}}if(e.target.id==='wallDim'){try{await saveWallpaper({dim:+e.target.value});toast('Wallpaper darkness saved')}catch(err){toast(err.message)}}if(e.target.dataset.archive==='calendar'){calendarMonth=e.target.value;render()}if(e.target.dataset.archive==='adminCycle'){adminCycle=e.target.value;render()}if(e.target.dataset.archive==='approvedMonth'){approvedMonth=e.target.value;render()}if(e.target.name==='month'&&e.target.closest('[data-form="rules"]')){adminMonth=e.target.value;render()}});
