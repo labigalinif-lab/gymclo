@@ -34,6 +34,9 @@ function emptyState() {
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
 if (!db.mvpCrown || typeof db.mvpCrown !== 'object' || Array.isArray(db.mvpCrown)) db.mvpCrown = null;
 if (!db.jukebox || typeof db.jukebox !== 'object' || Array.isArray(db.jukebox)) db.jukebox = {url:'',title:'',selectedBy:null,updatedAt:0};
+// Retain the previously selected track when upgrading an existing installation.
+if (!Array.isArray(db.radioHistory)) db.radioHistory = db.jukebox.url ? [{id:crypto.randomUUID(),...db.jukebox}] : [];
+
 for (const [k, v] of Object.entries(emptyState())) if (!Array.isArray(db[k])) db[k] = v;
 function persist() {
   const temporary = DB_FILE + '.tmp';
@@ -231,6 +234,11 @@ async function route(req, res) {
   const user = currentUser(req);
   if (req.method === 'GET' && uri === '/api/bootstrap')
     return send(res,200,{ setupRequired:db.profiles.length === 0, profiles:db.profiles.map(publicProfile), me:user?publicProfile(user):null, today:londonDay() });
+  if (req.method === 'GET' && uri === '/api/admin/pending-count') {
+    const who=auth(req);
+    if(!who.isAdmin)fail('Admin access required',403);
+    return send(res,200,{count:db.checkins.filter(c=>c.status==='pending'&&c.hasProof).length});
+  }
   if (req.method === 'GET' && uri === '/api/admin/status') {
     try { admin(req); return send(res,200,{unlocked:true}); } catch {return send(res,200,{unlocked:false});}
   }
@@ -243,7 +251,7 @@ async function route(req, res) {
     return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
       wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:'',textColor:'default'}, defaults:db.defaults,
       rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
-      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),messages:publicMessages(me.id),giphyEnabled:!!GIPHY_KEY,jukebox:db.jukebox });
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),messages:publicMessages(me.id),giphyEnabled:!!GIPHY_KEY,jukebox:db.jukebox,radioHistory:db.radioHistory });
   }
   const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
   if (req.method === 'GET' && feedImage) {
@@ -259,7 +267,7 @@ async function route(req, res) {
   const messageImage=/^\/api\/messages\/([a-f0-9-]+)\/image$/.exec(uri);
   if(req.method==='GET'&&messageImage){auth(req);const m=db.messages.find(x=>x.id===messageImage[1]);if(!m||!m.image)fail('Image unavailable',404);const pic=photoData(m.image,550000);res.writeHead(200,{'Content-Type':pic.mime,'Cache-Control':'private, no-store','X-Content-Type-Options':'nosniff'});return res.end(pic.data);}
   if (req.method==='GET' && uri==='/api/giphy/search') {auth(req);if(!GIPHY_KEY)fail('GIPHY search is not configured',503);const query=String(u.searchParams.get('q')||'').trim().slice(0,50);if(!query)fail('Enter a search');const upstream=new URL('https://api.giphy.com/v1/gifs/search');upstream.searchParams.set('api_key',GIPHY_KEY);upstream.searchParams.set('q',query);upstream.searchParams.set('limit','12');upstream.searchParams.set('rating','pg');const response=await fetch(upstream,{signal:AbortSignal.timeout(7000)});if(!response.ok)fail('GIPHY search unavailable',502);const data=await response.json();return send(res,200,{gifs:(data.data||[]).map(x=>({id:x.id,url:x.images?.fixed_width?.url||''})).filter(x=>/^[A-Za-z0-9]+$/.test(x.id)).slice(0,12)});}
-  if (req.method === 'GET' && uri === '/api/jukebox') { auth(req); return send(res,200,{jukebox:db.jukebox}); }
+  if (req.method === 'GET' && uri === '/api/jukebox') { auth(req); return send(res,200,{jukebox:db.jukebox,radioHistory:db.radioHistory}); }
   if (req.method === 'GET' && uri === '/api/feed') { const me=auth(req);return send(res,200,{feed:feedFor(me.id)}); }
 
   // Only an authenticated message author can remove a chat post or reply.
@@ -277,7 +285,7 @@ async function route(req, res) {
     db.messageReactions=db.messageReactions.filter(r=>!removed.has(r.messageId));
     persist();return send(res,200,{ok:true,deleted:removed.size});
   }
-  if (!['POST','PATCH'].includes(req.method)) fail('Method not allowed', 405);
+  if (!['POST','PATCH','DELETE'].includes(req.method)) fail('Method not allowed', 405);
   validateOrigin(req);
   const b = await bodyJson(req);
 
@@ -334,8 +342,31 @@ async function route(req, res) {
     url.hash = '';
     const title=typeof b.title==='string' && b.title.trim() ? b.title.trim().slice(0,120) :
       decodeURIComponent(url.pathname.split('/').filter(Boolean).slice(-1)[0]).replace(/-/g,' ').slice(0,120);
-    db.jukebox={url:url.toString(),title,selectedBy:user.id,updatedAt:Date.now()};
-    persist();return send(res,200,{ok:true,jukebox:db.jukebox});
+    // Keep a persistent record of all selected songs with author attribution.
+    const song={id:crypto.randomUUID(),url:url.toString(),title,selectedBy:user.id,updatedAt:Date.now()};
+    db.jukebox={url:song.url,title:song.title,selectedBy:song.selectedBy,updatedAt:song.updatedAt};
+    db.radioHistory.unshift(song);
+    persist();return send(res,200,{ok:true,jukebox:db.jukebox,radioHistory:db.radioHistory});
+  }
+  const historySelect=/^\/api\/radio-history\/([a-f0-9-]+)\/select$/.exec(uri);
+  if (req.method==='POST' && historySelect) {
+    const who=auth(req),song=db.radioHistory.find(x=>x.id===historySelect[1]);
+    if(!song)fail('Song not found',404);
+    if(song.selectedBy!==who.id)fail('Only the member who added this track can select it',403);
+    db.jukebox={url:song.url,title:song.title,selectedBy:song.selectedBy,updatedAt:Date.now()};
+    persist();return send(res,200,{ok:true,jukebox:db.jukebox,radioHistory:db.radioHistory});
+  }
+  const historyDelete=/^\/api\/radio-history\/([a-f0-9-]+)$/.exec(uri);
+  if(req.method==='DELETE' && historyDelete) {
+    const who=auth(req),song=db.radioHistory.find(x=>x.id===historyDelete[1]);
+    if(!song)fail('Song not found',404);
+    if(song.selectedBy!==who.id)fail('Only the member who added this track can delete it',403);
+    const active=db.jukebox?.url===song.url&&db.jukebox?.selectedBy===song.selectedBy;
+    db.radioHistory=db.radioHistory.filter(x=>x.id!==song.id);
+    // Do not cut off a playing track if only its archive entry was removed.
+    // Clear only if the deleted song was the sole matching history entry.
+    if(active&&!db.radioHistory.some(x=>x.url===song.url&&x.selectedBy===song.selectedBy))db.jukebox={url:'',title:'',selectedBy:null,updatedAt:Date.now()};
+    persist();return send(res,200,{ok:true,jukebox:db.jukebox,radioHistory:db.radioHistory});
   }
   const deleteSession=/^\/api\/admin\/checkins\/([a-f0-9-]+)\/delete$/.exec(uri);
   if (req.method === 'POST' && deleteSession) {
