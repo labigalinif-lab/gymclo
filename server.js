@@ -350,9 +350,10 @@ async function route(req, res) {
   }
   const historySelect=/^\/api\/radio-history\/([a-f0-9-]+)\/select$/.exec(uri);
   if (req.method==='POST' && historySelect) {
-    const who=auth(req),song=db.radioHistory.find(x=>x.id===historySelect[1]);
+    auth(req);const song=db.radioHistory.find(x=>x.id===historySelect[1]);
     if(!song)fail('Song not found',404);
-    if(song.selectedBy!==who.id)fail('Only the member who added this track can select it',403);
+    // Radio is shared: any signed-in member can replay a saved track.
+    // Deletion is still reserved for the member who originally added it.
     db.jukebox={url:song.url,title:song.title,selectedBy:song.selectedBy,updatedAt:Date.now()};
     persist();return send(res,200,{ok:true,jukebox:db.jukebox,radioHistory:db.radioHistory});
   }
