@@ -231,6 +231,41 @@
 @media(hover:none){.profile-tile:active .avatar{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.6),0 0 26px rgba(255,255,255,.3)}}
 @media(prefers-reduced-motion:reduce){.profile-tile,.profile-tile .avatar,.profile-tile .avatar img{animation:none!important;transition:none!important;transform:none!important}}
 
+
+/* Bubble-only selector: details appear on interaction, never occupy a grid row. */
+.profile-gallery{row-gap:clamp(17px,3.5vw,25px);padding-bottom:46px;overflow-x:clip}
+.profile-tile,.profile-tile:nth-child(n+4),.profile-tile:nth-child(6n + 4),.profile-tile:nth-child(6n + 5),.profile-tile:nth-child(6n + 6){
+  height:var(--bubble);min-height:0;padding:0;gap:0;align-self:start;
+}
+.profile-tile .profile-name,.profile-tile .micro{
+  position:absolute;left:50%;max-width:min(180px,43vw);width:max-content;
+  margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  text-align:center;pointer-events:none;z-index:15;
+  opacity:0;visibility:hidden;
+  transform:translate(-50%,-5px);
+  transition:opacity .19s ease,transform .22s cubic-bezier(.22,1,.36,1),visibility .19s;
+}
+.profile-tile .profile-name{
+  top:calc(var(--bubble) + 7px);font-size:12px;line-height:1.35;
+  padding:6px 13px 3px;border-radius:13px 13px 0 0;
+  background:rgba(24,20,29,.96);box-shadow:0 8px 20px rgba(0,0,0,.38);
+}
+.profile-tile .micro{
+  top:calc(var(--bubble) + 34px);font-size:10px;line-height:1.3;
+  padding:0 13px 7px;border-radius:0 0 13px 13px;
+  background:rgba(24,20,29,.96);color:#bfb6c5;
+}
+@media(hover:hover){
+ .profile-tile:hover .profile-name,.profile-tile:hover .micro{opacity:1;visibility:visible;transform:translate(-50%,0)}
+}
+.profile-tile:focus-visible .profile-name,.profile-tile:focus-visible .micro,
+.profile-tile.holding .profile-name,.profile-tile.holding .micro{
+ opacity:1;visibility:visible;transform:translate(-50%,0);
+}
+.profile-tile:is(:focus-visible,:hover,.holding){z-index:30}
+@media(max-width:440px){.profile-gallery{row-gap:23px;padding-bottom:48px}}
+@media(prefers-reduced-motion:reduce){.profile-tile .profile-name,.profile-tile .micro{transition:none}}
+
 </style>
 <title>gymclo — your crew, your consistency.</title>
 </head>
@@ -424,6 +459,20 @@ document.addEventListener('click',async e=>{const btn=e.target.closest('[data-ac
 document.addEventListener('keydown',e=>{if(entry.hidden||!pin.id||pin.mode==='claim')return;if(/^\d$/.test(e.key)){e.preventDefault();digit(e.key)}else if(e.key==='Backspace'){e.preventDefault();digit('⌫')}else if(e.key==='Escape'){pin.id='';renderEntry()}});
 entry.addEventListener('keydown',e=>{if(pin.id)return;const tiles=qa('.profile-tile');if(!tiles.length)return;if(e.key==='ArrowLeft'||e.key==='ArrowRight'){selection=Math.max(0,Math.min(tiles.length-1,selection+(e.key==='ArrowRight'?1:-1)));qa('.profile-tile').forEach((t,i)=>t.classList.toggle('active',i===selection));tiles[selection].scrollIntoView({block:'nearest',inline:'center',behavior:'smooth'});e.preventDefault()}if(e.key==='Enter'&&e.target.closest('.profile-gallery')===null){tiles[selection]?.click()}});
 entry.addEventListener('mouseover',e=>{const t=e.target.closest('.profile-tile');if(t){qa('.profile-tile').forEach(b=>b.classList.toggle('active',b===t))}});
+
+// Show a name only while a touch pointer is held on a profile (350 ms).
+let bubbleHoldTimer=null,bubbleHeld=null;
+entry.addEventListener('pointerdown',e=>{
+ if(e.pointerType==='mouse')return;
+ const tile=e.target.closest('.profile-tile');if(!tile)return;
+ clearTimeout(bubbleHoldTimer);bubbleHeld=tile;
+ bubbleHoldTimer=setTimeout(()=>{if(bubbleHeld===tile)tile.classList.add('holding')},350);
+});
+function clearBubbleHold(){clearTimeout(bubbleHoldTimer);bubbleHeld?.classList.remove('holding');bubbleHeld=null}
+entry.addEventListener('pointerup',clearBubbleHold);
+entry.addEventListener('pointercancel',clearBubbleHold);
+entry.addEventListener('pointerleave',clearBubbleHold);
+
 // Bubble lens follows the pointer gently without changing selection/login flow.
 entry.addEventListener('pointermove',e=>{if(e.pointerType!=='mouse'||!window.matchMedia('(prefers-reduced-motion: no-preference)').matches)return;const tile=e.target.closest('.profile-tile');if(!tile)return;const bubble=tile.querySelector('.avatar');if(!bubble)return;const r=bubble.getBoundingClientRect();const x=Math.max(-1,Math.min(1,(e.clientX-r.left-r.width/2)/(r.width/2)));const y=Math.max(-1,Math.min(1,(e.clientY-r.top-r.height/2)/(r.height/2)));bubble.style.setProperty('--bx',`${(-y*8).toFixed(2)}deg`);bubble.style.setProperty('--by',`${(x*8).toFixed(2)}deg`);bubble.style.setProperty('--ix',`${(-x*3).toFixed(1)}px`);bubble.style.setProperty('--iy',`${(-y*3).toFixed(1)}px`)});
 entry.addEventListener('pointerout',e=>{const tile=e.target.closest('.profile-tile');if(!tile||tile.contains(e.relatedTarget))return;const bubble=tile.querySelector('.avatar');if(!bubble)return;for(const v of ['--bx','--by','--ix','--iy'])bubble.style.removeProperty(v)});
