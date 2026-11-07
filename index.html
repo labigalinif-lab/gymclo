@@ -113,6 +113,52 @@
 .radio-filter{margin:6px 0 10px}.radio-list{max-height:380px;overflow-y:auto}.radio-row{display:flex;align-items:center;gap:10px;padding:11px 0;border-bottom:1px solid var(--edge)}.radio-row:last-child{border-bottom:0}.radio-row .radio-record{height:38px;width:38px;flex-shrink:0;border-radius:50%;display:grid;place-items:center;background:repeating-radial-gradient(circle,#242027 0 2px,#100e14 3px 5px);color:var(--red-light)}.radio-row .row-name{font-size:12px}.radio-controls{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.radio-controls .btn{font-size:11px;min-height:32px;padding:6px 9px}
 @media(max-width:420px){.profile-gallery{gap:0;max-height:49vh;padding:17px 2px 22px}.profile-tile{width:96px;height:143px;gap:5px}.profile-tile .avatar{height:78px;width:78px}.radio-row{gap:7px}.radio-controls .btn{padding:6px 7px}}
 @media(prefers-reduced-motion:reduce){.profile-entry-burst,.profile-entry-burst .burst-title{animation:none!important}.profile-entry-burst{display:none}}
+
+/* Premium connected profile hive: softer silhouettes, white-hover luminescence. */
+.profile-gallery{
+  --hive-size:clamp(94px,23vw,124px);
+  grid-template-columns:repeat(3,minmax(0,1fr));
+  width:min(100%,470px);max-width:470px;
+  gap:0;overflow-x:hidden;overflow-y:auto;
+  max-height:min(53dvh,490px);padding:25px 16px 32px;
+  margin:12px auto 5px;align-items:center;justify-items:center;
+  isolation:isolate;scrollbar-width:thin;
+}
+.profile-tile{
+  width:var(--hive-size);height:calc(var(--hive-size) + 30px);
+  gap:6px;opacity:.91;isolation:isolate;z-index:1;
+  transition:transform .42s cubic-bezier(.18,.89,.28,1.15), opacity .32s ease, filter .35s ease;
+  will-change:transform;
+}
+.profile-tile:nth-child(n+4){margin-top:-26px}
+.profile-tile:nth-child(6n + 4),.profile-tile:nth-child(6n + 5),.profile-tile:nth-child(6n + 6){transform:translateX(18%);margin-top:-26px}
+.profile-tile .avatar{
+  width:calc(var(--hive-size) - 8px);height:calc(var(--hive-size) - 8px);
+  clip-path:none;border-radius:35%;
+  border:1px solid rgba(255,255,255,.24);
+  background:linear-gradient(145deg,#ac6072,#32212d);
+  box-shadow:inset 0 1px rgba(255,255,255,.15),0 8px 28px rgba(0,0,0,.31);
+  transition:border-color .35s ease,box-shadow .4s ease,filter .4s ease;
+}
+.profile-tile .profile-name{max-width:calc(var(--hive-size) - 3px);font-size:12px;font-weight:800;letter-spacing:-.025em;color:#f7f4f6;transition:color .3s ease}
+.profile-tile .micro{font-size:9px;letter-spacing:.015em}
+.profile-tile:is(:hover,:focus-visible){z-index:5;opacity:1;transform:scale(1.075);filter:none}
+.profile-tile:nth-child(6n + 4):is(:hover,:focus-visible),
+.profile-tile:nth-child(6n + 5):is(:hover,:focus-visible),
+.profile-tile:nth-child(6n + 6):is(:hover,:focus-visible){transform:translateX(18%) scale(1.075)}
+.profile-tile:is(:hover,:focus-visible) .avatar{
+  border-color:rgba(255,255,255,.95);
+  box-shadow:0 0 0 2px rgba(255,255,255,.58),0 0 18px 3px rgba(255,255,255,.52),0 0 45px rgba(255,255,255,.24),0 14px 36px rgba(0,0,0,.5);
+  filter:brightness(1.09);
+}
+.profile-tile.active:not(:hover):not(:focus-visible){opacity:1;filter:none}
+.profile-tile.active:not(:hover):not(:focus-visible) .avatar{border-color:rgba(255,255,255,.55);box-shadow:0 0 0 2px rgba(255,255,255,.12),0 0 17px rgba(255,255,255,.13),0 11px 30px rgba(0,0,0,.33)}
+.profile-tile:focus-visible{outline:none}
+.profile-gallery:has(.profile-tile:hover) .profile-tile:not(:hover){opacity:.74}
+@media(max-width:420px){.profile-gallery{--hive-size:clamp(88px,27vw,108px);padding:22px 8px 31px;max-height:min(50dvh,450px)}.profile-tile:nth-child(n+4){margin-top:-22px}.profile-tile:nth-child(6n + 4),.profile-tile:nth-child(6n + 5),.profile-tile:nth-child(6n + 6){margin-top:-22px}}
+@media(hover:none){.profile-tile:active .avatar{border-color:#fff;box-shadow:0 0 0 2px rgba(255,255,255,.5),0 0 22px rgba(255,255,255,.35)}}
+@media(prefers-reduced-motion:reduce){.profile-tile,.profile-tile .avatar{transition:none!important}}
+
 </style>
 <title>gymclo — your crew, your consistency.</title>
 </head>
