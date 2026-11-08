@@ -160,6 +160,11 @@ function cookie(req) {
   const found = all.find(x => x.startsWith(COOKIE_NAME + '='));
   return found ? found.slice(COOKIE_NAME.length + 1) : '';
 }
+function headerToken(req){
+  const auth = String(req.headers.authorization || '');
+  if (auth.startsWith('Bearer ')) return auth.slice(7).trim();
+  return String(req.headers['x-gymclo-session'] || '').trim();
+}
 function sign(profile) {
   const data = Buffer.from(JSON.stringify({ sub: profile.id, v: profile.sessionVersion || 0, exp: Math.floor(Date.now()/1000)+SESSION_SECONDS })).toString('base64url');
   const digest = crypto.createHmac('sha256', SESSION_SECRET).update(data).digest('base64url');
@@ -167,7 +172,8 @@ function sign(profile) {
 }
 function currentUser(req) {
   try {
-    const [payload, signature] = cookie(req).split('.');
+    const raw = cookie(req) || headerToken(req);
+    const [payload, signature] = raw.split('.');
     if (!payload || !signature) return null;
     const expected = crypto.createHmac('sha256', SESSION_SECRET).update(payload).digest('base64url');
     if (!safeEqual(signature, expected)) return null;
@@ -337,13 +343,13 @@ async function route(req, res) {
     if (!safeEqual(b.setupCode, SETUP_CODE)) fail('Invalid setup code',403);
     if (!pinValid(b.pin)) fail('PIN must be exactly four digits');
     const profile = {id:id(),name:checkName(b.name),avatar:'',isAdmin:true,claimed:true,pinHash:hashPin(b.pin),sessionVersion:0};
-    db.profiles.push(profile);db.ownerId=profile.id;persist();setLogin(res,profile);return send(res,200,{ok:true});
+    db.profiles.push(profile);db.ownerId=profile.id;persist();setLogin(res,profile);return send(res,200,{ok:true,sessionToken:sign(profile),profileId:profile.id});
   }
   if (req.method === 'POST' && uri === '/api/login') {
     const p = db.profiles.find(x=>x.id===b.profileId);
     checkPinRate(req,b.profileId);
     if (!p || !p.claimed || !pinMatches(b.pin,p.pinHash)) wrongPin(req,b.profileId);
-    clearPinRate(req,b.profileId);setLogin(res,p);return send(res,200,{ok:true});
+    clearPinRate(req,b.profileId);setLogin(res,p);return send(res,200,{ok:true,sessionToken:sign(p),profileId:p.id});
   }
   if (req.method === 'POST' && uri === '/api/claim') {
     const p = db.profiles.find(x=>x.id===b.profileId);
@@ -351,7 +357,7 @@ async function route(req, res) {
     if (!p || p.claimed || !safeEqual(String(b.claimCode||'').trim().toUpperCase(),p.claimCode)) wrongPin(req,b.profileId);
     if (!pinValid(b.pin)) fail('PIN must be exactly four digits');
     p.pinHash=hashPin(b.pin);p.claimed=true;delete p.claimCode;p.sessionVersion=(p.sessionVersion||0)+1;
-    persist();clearPinRate(req,b.profileId);setLogin(res,p);return send(res,200,{ok:true});
+    persist();clearPinRate(req,b.profileId);setLogin(res,p);return send(res,200,{ok:true,sessionToken:sign(p),profileId:p.id});
   }
   if (req.method === 'POST' && uri === '/api/admin/unlock') {
     const p=auth(req);if (!p.isAdmin) fail('Admin access required',403);
