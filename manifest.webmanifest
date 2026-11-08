@@ -1,0 +1,35 @@
+{
+  "id": "/",
+  "name": "Gymclo \u2014 Your Crew, Your Consistency",
+  "short_name": "Gymclo",
+  "description": "A private four-day gym challenge for your crew.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#100e12",
+  "theme_color": "#100e12",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "categories": [
+    "fitness",
+    "social"
+  ]
+}
