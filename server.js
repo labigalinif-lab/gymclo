@@ -16,6 +16,27 @@ const SESSION_SECONDS = 7 * 24 * 3600;
 const ADMIN_PIN = process.env.GYMCLO_ADMIN_PIN || '';
 const ADMIN_SECONDS = 15 * 60;
 const PIN_ATTEMPTS = new Map();
+const DEFAULT_ACHIEVEMENTS = [{"id": "first", "title": "First Rep", "icon": "✦", "description": "The first verified session", "metric": "workouts", "unit": "session", "thresholds": [1], "enabled": true}, {"id": "standard", "title": "Four-Day Standard", "icon": "✓", "description": "Completed weeks at your target", "metric": "weeks", "unit": "completed week", "thresholds": [1, 2, 4, 8, 12], "enabled": true}, {"id": "daystreak", "title": "Daily Momentum", "icon": "⚡", "description": "Your best consecutive gym-day streak", "metric": "daystreak", "unit": "consecutive day", "thresholds": [2, 4, 7, 14, 30], "enabled": true}, {"id": "weekstreak", "title": "Iron Streak", "icon": "◇", "description": "Your best consecutive completed weeks", "metric": "weekstreak", "unit": "consecutive week", "thresholds": [1, 2, 4, 8, 12], "enabled": true}, {"id": "days", "title": "The Regular", "icon": "◆", "description": "Verified gym days across all time", "metric": "days", "unit": "gym day", "thresholds": [4, 12, 25, 50, 100], "enabled": true}, {"id": "cycle", "title": "Perfect Cycle", "icon": "♛", "description": "Four completed weeks in a challenge cycle", "metric": "cycles", "unit": "perfect cycle", "thresholds": [1, 2, 3, 5, 10], "enabled": true}];
+const DEFAULT_MEDAL_TIERS = [{"id": "bronze", "label": "Bronze", "icon": "🥉"}, {"id": "silver", "label": "Silver", "icon": "🥈"}, {"id": "gold", "label": "Gold", "icon": "🥇"}, {"id": "platinum", "label": "Platinum", "icon": "✧"}, {"id": "diamond", "label": "Diamond", "icon": "💎"}];
+
+function defaultAchievementConfig(){return {achievements:structuredClone(DEFAULT_ACHIEVEMENTS),tiers:structuredClone(DEFAULT_MEDAL_TIERS)};}
+function validateAchievementConfig(input){
+ if(!input || !Array.isArray(input.achievements) || input.achievements.length!==DEFAULT_ACHIEVEMENTS.length || !Array.isArray(input.tiers) || input.tiers.length!==DEFAULT_MEDAL_TIERS.length) fail('Invalid achievement catalogue');
+ const metricTypes=['workouts','days','weeks','daystreak','weekstreak','cycles'];
+ const achievements=input.achievements.map((a,i)=>{
+  const reference=DEFAULT_ACHIEVEMENTS[i];
+  if(!a || a.id!==reference.id || typeof a.title!=='string' || !a.title.trim() || a.title.length>48 || typeof a.icon!=='string' || !a.icon.trim() || [...a.icon].length>8 || typeof a.description!=='string' || a.description.length>160 || typeof a.unit!=='string' || !a.unit.trim() || a.unit.length>32 || !metricTypes.includes(a.metric) || typeof a.enabled!=='boolean') fail('Invalid achievement details');
+  if(!Array.isArray(a.thresholds)||a.thresholds.length<1||a.thresholds.length>5 || a.thresholds.some((v,j)=>!Number.isInteger(v)||v<1||v>10000||(j>0&&v<=a.thresholds[j-1])))fail('Medal thresholds must be ascending positive integers (max five)');
+  return {id:reference.id,title:a.title.trim(),icon:a.icon.trim(),description:a.description.trim(),unit:a.unit.trim(),metric:a.metric,thresholds:a.thresholds,enabled:a.enabled};
+ });
+ const tiers=input.tiers.map((t,i)=>{
+  const reference=DEFAULT_MEDAL_TIERS[i];
+  if(!t || t.id!==reference.id || typeof t.label!=='string' || !t.label.trim() || t.label.length>24 || typeof t.icon!=='string' || !t.icon.trim() || [...t.icon].length>8) fail('Invalid medal details');
+  return {id:reference.id,label:t.label.trim(),icon:t.icon.trim()};
+ });
+ return {achievements,tiers};
+}
+
 const DEFAULTS = [
   '40 bodyweight squats + 30-second plank',
   '60 alternating lunges + 60-second plank',
@@ -32,6 +53,10 @@ function emptyState() {
   return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], messages: [], messageReactions: [], audit: [] };
 }
 let db = fs.existsSync(DB_FILE) ? JSON.parse(fs.readFileSync(DB_FILE, 'utf8')) : emptyState();
+// Preserve the original setup account as the permanent owner during upgrades.
+if (!db.ownerId && db.profiles?.length) db.ownerId = (db.profiles.find(p=>p.isAdmin) || db.profiles[0]).id;
+if(db.ownerId){const owner=db.profiles.find(p=>p.id===db.ownerId);if(owner)owner.isAdmin=true;}
+if (!db.achievementConfig || !Array.isArray(db.achievementConfig.achievements)) db.achievementConfig=defaultAchievementConfig();
 if (!db.mvpCrown || typeof db.mvpCrown !== 'object' || Array.isArray(db.mvpCrown)) db.mvpCrown = null;
 if (!db.jukebox || typeof db.jukebox !== 'object' || Array.isArray(db.jukebox)) db.jukebox = {url:'',title:'',selectedBy:null,updatedAt:0};
 // Retain the previously selected track when upgrading an existing installation.
@@ -69,7 +94,7 @@ function pinMatches(pin, stored) {
   const actual = crypto.scryptSync(pin, salt, 32).toString('hex');
   return safeEqual(actual, expected);
 }
-function publicProfile(p) { return { id: p.id, name: p.name, avatar: p.avatar || '', claimed: !!p.claimed, isAdmin: !!p.isAdmin }; }
+function publicProfile(p) { return { id:p.id,name:p.name,avatar:p.avatar||'',claimed:!!p.claimed,isAdmin:!!p.isAdmin||p.id===db.ownerId,isOwner:p.id===db.ownerId }; }
 function londonDay() {
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const t = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
@@ -269,7 +294,7 @@ async function route(req, res) {
     return send(res,200,{ me:publicProfile(me), profiles:db.profiles.map(publicProfile), today:londonDay(),
       wallpaper:me.wallpaper||{theme:'ember',dim:0.18,photo:'',textColor:'default'}, defaults:db.defaults,
       rules:db.rules,checkins,done:db.done,cycleRules:db.cycleRules,
-      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),messages:publicMessages(me.id),giphyEnabled:!!GIPHY_KEY,jukebox:db.jukebox,radioHistory:db.radioHistory });
+      proposals:db.proposals,proposalVotes:db.proposalVotes,mvpVotes:db.mvpVotes,mvpCrown:db.mvpCrown,feed:feedFor(me.id),messages:publicMessages(me.id),giphyEnabled:!!GIPHY_KEY,jukebox:db.jukebox,radioHistory:db.radioHistory,achievementConfig:db.achievementConfig });
   }
   const feedImage=/^\/api\/feed\/([a-f0-9-]+)\/image$/.exec(uri);
   if (req.method === 'GET' && feedImage) {
@@ -312,7 +337,7 @@ async function route(req, res) {
     if (!safeEqual(b.setupCode, SETUP_CODE)) fail('Invalid setup code',403);
     if (!pinValid(b.pin)) fail('PIN must be exactly four digits');
     const profile = {id:id(),name:checkName(b.name),avatar:'',isAdmin:true,claimed:true,pinHash:hashPin(b.pin),sessionVersion:0};
-    db.profiles.push(profile);persist();setLogin(res,profile);return send(res,200,{ok:true});
+    db.profiles.push(profile);db.ownerId=profile.id;persist();setLogin(res,profile);return send(res,200,{ok:true});
   }
   if (req.method === 'POST' && uri === '/api/login') {
     const p = db.profiles.find(x=>x.id===b.profileId);
@@ -333,7 +358,7 @@ async function route(req, res) {
     checkPinRate(req, 'admin:'+p.id);
     // GYMCLO_ADMIN_PIN is configured in Railway (2002), never shipped to browser.
     // Until configured, the owner's existing login PIN is used.
-    const valid=ADMIN_PIN ? safeEqual(String(b.pin), ADMIN_PIN) : pinMatches(b.pin,p.pinHash);
+    const valid = p.id===db.ownerId ? (ADMIN_PIN ? safeEqual(String(b.pin),ADMIN_PIN) : pinMatches(b.pin,p.pinHash)) : pinMatches(b.pin,p.pinHash);
     if (!valid) wrongPin(req,'admin:'+p.id);
     clearPinRate(req,'admin:'+p.id);
     const expiry=Math.floor(Date.now()/1000)+ADMIN_SECONDS;
@@ -349,6 +374,27 @@ async function route(req, res) {
     const photo=b.photo ? photoData(b.photo, 550000).value : '';
     const textColor=String(b.textColor||'default');if(!['default','rose','ice','mint','gold','lavender','warm'].includes(textColor))fail('Invalid text colour');me.wallpaper={theme,dim,photo,textColor};persist();return send(res,200,{ok:true});
   }
+
+  if (req.method === 'POST' && uri === '/api/admin/achievements') {
+    const actor=admin(req);
+    db.achievementConfig=validateAchievementConfig(b);
+    db.audit.push({event:'achievement-config-updated',adminId:actor.id,at:Date.now()});
+    persist();return send(res,200,{ok:true,achievementConfig:db.achievementConfig});
+  }
+  if (req.method === 'POST' && uri === '/api/admin/roles') {
+    const actor=admin(req);
+    if(actor.id!==db.ownerId) fail('Only the Gymclo owner can manage admin access',403);
+    if(typeof b.grant!=='boolean') fail('Select whether to grant or revoke admin access');
+    const member=db.profiles.find(p=>p.id===b.profileId);
+    if(!member) fail('Profile not found',404);
+    if(member.id===db.ownerId) fail('The owner cannot have their permissions changed',403);
+    if(b.grant&&!member.claimed) fail('Member must claim their profile first',400);
+    member.isAdmin=b.grant;
+    member.sessionVersion=(member.sessionVersion||0)+1;
+    db.audit.push({event:b.grant?'admin-granted':'admin-revoked',adminId:actor.id,profileId:member.id,at:Date.now()});
+    persist();return send(res,200,{ok:true,profiles:db.profiles.map(publicProfile)});
+  }
+
   if (req.method === 'POST' && uri === '/api/jukebox') {
     const user = auth(req);
     let url;
@@ -420,14 +466,15 @@ async function route(req, res) {
   const reset = /^\/api\/profiles\/([^/]+)\/reset$/.exec(uri);
   if (reset && req.method === 'POST') {
     admin(req);const p=db.profiles.find(x=>x.id===reset[1]);if(!p)fail('Profile not found',404);
-    if (p.isAdmin) fail('The owner PIN cannot be reset here',403);
+    if (p.id===db.ownerId) fail("The owner's PIN cannot be reset here",403);
+    if (p.isAdmin && currentUser(req)?.id!==db.ownerId) fail('Only the owner may reset another administrator',403);
     p.claimed=false;p.pinHash='';p.claimCode=code();p.sessionVersion=(p.sessionVersion||0)+1;
     persist();return send(res,200,{inviteCode:p.claimCode});
   }
   const edit = /^\/api\/profiles\/([^/]+)$/.exec(uri);
   if (edit && req.method === 'PATCH') {
     const who=auth(req),p=db.profiles.find(x=>x.id===edit[1]);if(!p)fail('Profile not found',404);
-    if (who.id!==p.id) admin(req); // Other people's profiles require the unlocked admin PIN.
+    if (who.id!==p.id) { admin(req); if(p.id===db.ownerId && who.id!==db.ownerId) fail('Owner profile is protected',403); } // Other members' profiles require unlocked admin privileges.
     p.name=checkName(b.name);
     if (b.avatar !== undefined && b.avatar !== p.avatar) p.avatar=b.avatar ? photoData(b.avatar).value : '';
     persist();return send(res,200,{ok:true});
