@@ -1,13 +1,12 @@
 {
-  "id": "/",
-  "name": "Gymclo \u2014 Your Crew, Your Consistency",
+  "name": "Gymclo",
   "short_name": "Gymclo",
-  "description": "A private four-day gym challenge for your crew.",
+  "description": "Gymclo fitness tracker and crew challenge app",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#100e12",
-  "theme_color": "#100e12",
+  "background_color": "#000000",
+  "theme_color": "#000000",
   "icons": [
     {
       "src": "/icons/icon-192.png",
@@ -27,9 +26,5 @@
       "type": "image/png",
       "purpose": "maskable"
     }
-  ],
-  "categories": [
-    "fitness",
-    "social"
   ]
 }

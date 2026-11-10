@@ -9,6 +9,7 @@ const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = process.env.GYMCLO_DATA_DIR || (process.env.RAILWAY_ENVIRONMENT ? '/app/data' : path.join(__dirname, 'data'));
 const DB_FILE = path.join(DATA_DIR, 'gymclo.json');
 const PROOF_DIR = path.join(DATA_DIR, 'proofs');
+const MEDAL_ART_DIR = path.join(DATA_DIR, 'medal-art');
 const SETUP_CODE = process.env.GYMCLO_SETUP_CODE || '';
 const SESSION_SECRET = process.env.GYMCLO_SESSION_SECRET || '';
 const COOKIE_NAME = 'gymclo_session';
@@ -19,7 +20,24 @@ const PIN_ATTEMPTS = new Map();
 const DEFAULT_ACHIEVEMENTS = [{"id": "first", "title": "First Rep", "icon": "✦", "description": "The first verified session", "metric": "workouts", "unit": "session", "thresholds": [1], "enabled": true}, {"id": "standard", "title": "Four-Day Standard", "icon": "✓", "description": "Completed weeks at your target", "metric": "weeks", "unit": "completed week", "thresholds": [1, 2, 4, 8, 12], "enabled": true}, {"id": "daystreak", "title": "Daily Momentum", "icon": "⚡", "description": "Your best consecutive gym-day streak", "metric": "daystreak", "unit": "consecutive day", "thresholds": [2, 4, 7, 14, 30], "enabled": true}, {"id": "weekstreak", "title": "Iron Streak", "icon": "◇", "description": "Your best consecutive completed weeks", "metric": "weekstreak", "unit": "consecutive week", "thresholds": [1, 2, 4, 8, 12], "enabled": true}, {"id": "days", "title": "The Regular", "icon": "◆", "description": "Verified gym days across all time", "metric": "days", "unit": "gym day", "thresholds": [4, 12, 25, 50, 100], "enabled": true}, {"id": "cycle", "title": "Perfect Cycle", "icon": "♛", "description": "Four completed weeks in a challenge cycle", "metric": "cycles", "unit": "perfect cycle", "thresholds": [1, 2, 3, 5, 10], "enabled": true}];
 const DEFAULT_MEDAL_TIERS = [{"id": "bronze", "label": "Bronze", "icon": "🥉"}, {"id": "silver", "label": "Silver", "icon": "🥈"}, {"id": "gold", "label": "Gold", "icon": "🥇"}, {"id": "platinum", "label": "Platinum", "icon": "✧"}, {"id": "diamond", "label": "Diamond", "icon": "💎"}];
 
-function defaultAchievementConfig(){return {achievements:structuredClone(DEFAULT_ACHIEVEMENTS),tiers:structuredClone(DEFAULT_MEDAL_TIERS)};}
+function defaultAchievementConfig(){return {achievements:DEFAULT_ACHIEVEMENTS.map(a=>({...a,iconImage:'',medalImages:{}})),tiers:DEFAULT_MEDAL_TIERS.map(t=>({...t,iconImage:''}))};}
+const validArtPath = v => typeof v==='string' && (v==='' || /^\/api\/medal-art\/[a-f0-9]{32}\.(?:png|webp)$/.test(v));
+function cleanArtPath(value){ const v=value===undefined?'':value; if(!validArtPath(v)) fail('Invalid medal artwork reference'); if(v&&!fs.existsSync(path.join(MEDAL_ART_DIR,path.basename(v))))fail('Medal artwork not found on server'); return v; }
+function medalArtworkFor(achievement,tier){return achievement.medalImages?.[tier.id]||tier.iconImage||achievement.iconImage||''}
+function verifiedMedalMetrics(profileId){
+ const own=db.checkins.filter(c=>c.profileId===profileId&&c.status==='approved'&&typeof c.day==='string'&&/^20\d\d-\d\d-\d\d$/.test(c.day)&&c.day<=londonDay());
+ const days=[...new Set(own.map(c=>c.day))].sort();const weeks=new Map();for(const day of days){const w=monday(day);weeks.set(w,(weeks.get(w)||0)+1)}
+ const validWeeks=[...weeks.keys()].filter(w=>weeks.get(w)>=cycleTarget(w)).sort();const validSet=new Set(validWeeks);
+ let bestDay=0,runDay=0,previousDay='',bestWeek=0,runWeek=0,previousWeek='';
+ for(const d of days){runDay=previousDay&&addDays(previousDay,1)===d?runDay+1:1;bestDay=Math.max(bestDay,runDay);previousDay=d}
+ for(const w of validWeeks){runWeek=previousWeek&&addDays(previousWeek,7)===w?runWeek+1:1;bestWeek=Math.max(bestWeek,runWeek);previousWeek=w}
+ const cycleStarts=new Set(validWeeks.map(cycleStart));let perfect=0;
+ for(const start of cycleStarts){if([0,7,14,21].every(i=>{const w=addDays(start,i);return validSet.has(w)&&addDays(w,6)<londonDay()}))perfect++}
+ return {workouts:own.length,days:days.length,weeks:validWeeks.length,daystreak:bestDay,weekstreak:bestWeek,cycles:perfect};
+}
+function earnedMedal(profileId,achievement){if(!achievement||achievement.enabled===false)return null;const val=verifiedMedalMetrics(profileId)[achievement.metric]||0;let idx=-1;achievement.thresholds.forEach((t,i)=>{if(val>=t)idx=i});if(idx<0)return null;const tier=db.achievementConfig.tiers[Math.min(idx,4)];return {id:achievement.id,title:achievement.title,icon:tier.icon,iconImage:medalArtworkFor(achievement,tier),tierLabel:tier.label,tierId:tier.id};}
+function publicMedals(p){const selected=Array.isArray(p.medalShow)?p.medalShow.slice(0,5):[];return selected.map(id=>earnedMedal(p.id,db.achievementConfig.achievements.find(a=>a.id===id))).filter(Boolean)}
+
 function validateAchievementConfig(input){
  if(!input || !Array.isArray(input.achievements) || input.achievements.length!==DEFAULT_ACHIEVEMENTS.length || !Array.isArray(input.tiers) || input.tiers.length!==DEFAULT_MEDAL_TIERS.length) fail('Invalid achievement catalogue');
  const metricTypes=['workouts','days','weeks','daystreak','weekstreak','cycles'];
@@ -27,12 +45,13 @@ function validateAchievementConfig(input){
   const reference=DEFAULT_ACHIEVEMENTS[i];
   if(!a || a.id!==reference.id || typeof a.title!=='string' || !a.title.trim() || a.title.length>48 || typeof a.icon!=='string' || !a.icon.trim() || [...a.icon].length>8 || typeof a.description!=='string' || a.description.length>160 || typeof a.unit!=='string' || !a.unit.trim() || a.unit.length>32 || !metricTypes.includes(a.metric) || typeof a.enabled!=='boolean') fail('Invalid achievement details');
   if(!Array.isArray(a.thresholds)||a.thresholds.length<1||a.thresholds.length>5 || a.thresholds.some((v,j)=>!Number.isInteger(v)||v<1||v>10000||(j>0&&v<=a.thresholds[j-1])))fail('Medal thresholds must be ascending positive integers (max five)');
-  return {id:reference.id,title:a.title.trim(),icon:a.icon.trim(),description:a.description.trim(),unit:a.unit.trim(),metric:a.metric,thresholds:a.thresholds,enabled:a.enabled};
+  const medalImages={};for(const tier of DEFAULT_MEDAL_TIERS){const art=cleanArtPath(a.medalImages?.[tier.id]);if(art)medalImages[tier.id]=art}
+  return {id:reference.id,title:a.title.trim(),icon:a.icon.trim(),iconImage:cleanArtPath(a.iconImage),medalImages,description:a.description.trim(),unit:a.unit.trim(),metric:a.metric,thresholds:a.thresholds,enabled:a.enabled};
  });
  const tiers=input.tiers.map((t,i)=>{
   const reference=DEFAULT_MEDAL_TIERS[i];
   if(!t || t.id!==reference.id || typeof t.label!=='string' || !t.label.trim() || t.label.length>24 || typeof t.icon!=='string' || !t.icon.trim() || [...t.icon].length>8) fail('Invalid medal details');
-  return {id:reference.id,label:t.label.trim(),icon:t.icon.trim()};
+  return {id:reference.id,label:t.label.trim(),icon:t.icon.trim(),iconImage:cleanArtPath(t.iconImage)};
  });
  return {achievements,tiers};
 }
@@ -49,6 +68,7 @@ if (!SETUP_CODE || SETUP_CODE.length < 12 || !SESSION_SECRET || SESSION_SECRET.l
   process.exit(1);
 }
 fs.mkdirSync(PROOF_DIR, { recursive: true });
+fs.mkdirSync(MEDAL_ART_DIR,{recursive:true});
 function emptyState() {
   return { profiles: [], checkins: [], rules: [], done: [], proposals: [], proposalVotes: [], mvpVotes: [], defaults: DEFAULTS, cycleRules: [], reactions: [], messages: [], messageReactions: [], audit: [] };
 }
@@ -94,7 +114,7 @@ function pinMatches(pin, stored) {
   const actual = crypto.scryptSync(pin, salt, 32).toString('hex');
   return safeEqual(actual, expected);
 }
-function publicProfile(p) { return { id:p.id,name:p.name,avatar:p.avatar||'',claimed:!!p.claimed,isAdmin:!!p.isAdmin||p.id===db.ownerId,isOwner:p.id===db.ownerId }; }
+function publicProfile(p) { return { id:p.id,name:p.name,avatar:p.avatar||'',claimed:!!p.claimed,isAdmin:!!p.isAdmin||p.id===db.ownerId,isOwner:p.id===db.ownerId,medalShow:Array.isArray(p.medalShow)?p.medalShow.slice(0,5):[],displayMedals:publicMedals(p) }; }
 function londonDay() {
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/London', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   const t = Object.fromEntries(parts.filter(p => p.type !== 'literal').map(p => [p.type, p.value]));
@@ -228,6 +248,16 @@ function photoData(value, maxBytes = 550000) {
   if (!valid) fail('Invalid image file');
   return { mime, data, value };
 }
+function artUploadData(value){
+ if(typeof value!=='string')fail('Upload a PNG or WebP image');
+ const match=/^data:(image\/(?:png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(value);
+ if(!match)fail('Only PNG or WebP medal artwork is supported');
+ const data=Buffer.from(match[2],'base64');if(!data.length||data.length>550000)fail('Artwork must be smaller than 550 KB');
+ const isPng=match[1]==='image/png';const valid=isPng?data.length>=33&&data.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])):data.length>=20&&data.toString('ascii',0,4)==='RIFF'&&data.toString('ascii',8,12)==='WEBP';
+ if(!valid)fail('Invalid PNG/WebP file');
+ if(isPng){const width=data.readUInt32BE(16),height=data.readUInt32BE(20);if(width<1||height<1||width>2048||height>2048)fail('Artwork dimensions must be at most 2048 × 2048');}
+ return {data,ext:isPng?'png':'webp'};
+}
 async function bodyJson(req) {
   return new Promise((resolve, reject) => {
     let count = 0, chunks = [];
@@ -257,12 +287,25 @@ async function route(req, res) {
   const u = new URL(req.url, 'http://localhost');
   const uri = u.pathname;
   if (req.method === 'GET' && uri === '/health') return send(res, 200, { ok:true });
+  const medalArtRequest=/^\/api\/medal-art\/([a-f0-9]{32})\.(png|webp)$/.exec(uri);
+  if(medalArtRequest && (req.method==='GET'||req.method==='HEAD')){
+    const target=path.join(MEDAL_ART_DIR,medalArtRequest[1]+'.'+medalArtRequest[2]);
+    if(!fs.existsSync(target))fail('Medal image unavailable',404);
+    res.writeHead(200,{'Content-Type':medalArtRequest[2]==='png'?'image/png':'image/webp','Cache-Control':'public, max-age=31536000, immutable','X-Content-Type-Options':'nosniff','Content-Security-Policy':"default-src 'none'; sandbox"});
+    if(req.method==='HEAD')return res.end();return fs.createReadStream(target).pipe(res);
+  }
   if (req.method === 'GET' && (uri === '/' || uri === '/index.html')) {
     res.writeHead(200, {'Content-Type':'text/html; charset=utf-8','Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'});
     return fs.createReadStream(path.join(__dirname,'public','index.html')).pipe(res);
   }
   // Installable web app assets. Serve only explicit public filenames, never private data.
   const publicAssets = {
+    '/gymclo-g-20261109-v2.webmanifest': ['gymclo-g-20261109-v2.webmanifest','application/manifest+json','no-store'],
+    '/gymclo-g-20261109-v2-favicon.png': ['gymclo-g-20261109-v2-favicon.png','image/png','no-store'],
+    '/gymclo-g-20261109-v2-apple-touch-icon.png': ['gymclo-g-20261109-v2-apple-touch-icon.png','image/png','no-store'],
+    '/icons/gymclo-g-20261109-v2-192.png': ['icons/gymclo-g-20261109-v2-192.png','image/png','no-store'],
+    '/icons/gymclo-g-20261109-v2-512.png': ['icons/gymclo-g-20261109-v2-512.png','image/png','no-store'],
+    '/icons/gymclo-g-20261109-v2-maskable.png': ['icons/gymclo-g-20261109-v2-maskable.png','image/png','no-store'],
     '/manifest.webmanifest': ['manifest.webmanifest','application/manifest+json','no-cache'],
     '/sw.js': ['sw.js','application/javascript; charset=utf-8','no-cache'],
     '/favicon.png': ['favicon.png','image/png','public, max-age=86400'],
@@ -381,6 +424,20 @@ async function route(req, res) {
     const textColor=String(b.textColor||'default');if(!['default','rose','ice','mint','gold','lavender','warm'].includes(textColor))fail('Invalid text colour');me.wallpaper={theme,dim,photo,textColor};persist();return send(res,200,{ok:true});
   }
 
+  if (req.method==='POST' && uri==='/api/admin/medal-art'){
+    const actor=admin(req);const asset=artUploadData(b.image);const digest=crypto.createHash('sha256').update(asset.data).digest('hex').slice(0,32);
+    const filename=digest+'.'+asset.ext,filepath=path.join(MEDAL_ART_DIR,filename);
+    if(!fs.existsSync(filepath))fs.writeFileSync(filepath,asset.data,{flag:'wx',mode:0o600});
+    db.audit.push({event:'medal-art-uploaded',adminId:actor.id,filename,at:Date.now()});persist();
+    return send(res,200,{ok:true,url:'/api/medal-art/'+filename});
+  }
+  if(req.method==='POST'&&uri==='/api/me/medals'){
+    const who=auth(req),ids=b.ids;
+    if(!Array.isArray(ids)||ids.length>5||ids.some(x=>typeof x!=='string')||new Set(ids).size!==ids.length)fail('Choose up to five unique medals');
+    const cfg=db.achievementConfig;
+    for(const medalId of ids){const ach=cfg.achievements.find(a=>a.id===medalId);if(!earnedMedal(who.id,ach))fail('Only earned medals may appear on your profile',403)}
+    who.medalShow=ids;persist();return send(res,200,{ok:true,medalShow:ids,displayMedals:publicMedals(who)});
+  }
   if (req.method === 'POST' && uri === '/api/admin/achievements') {
     const actor=admin(req);
     db.achievementConfig=validateAchievementConfig(b);
@@ -438,6 +495,23 @@ async function route(req, res) {
     // Clear only if the deleted song was the sole matching history entry.
     if(active&&!db.radioHistory.some(x=>x.url===song.url&&x.selectedBy===song.selectedBy))db.jukebox={url:'',title:'',selectedBy:null,updatedAt:Date.now()};
     persist();return send(res,200,{ok:true,jukebox:db.jukebox,radioHistory:db.radioHistory});
+  }
+  // A member may remove only their own logged session. Admin removal remains separate.
+  const ownSessionDelete=/^\/api\/checkins\/([a-f0-9-]+)$/.exec(uri);
+  if (req.method === 'DELETE' && ownSessionDelete) {
+    const who=auth(req),c=db.checkins.find(x=>x.id===ownSessionDelete[1]);
+    if (!c || c.status==='deleted') fail('Session not found',404);
+    if (c.profileId!==who.id) fail('You can only delete your own workout sessions',403);
+    c.status='deleted';c.shareToFeed=false;c.deletedBy=who.id;c.deletedAt=Date.now();
+    db.reactions=db.reactions.filter(x=>x.checkinId!==c.id);
+    db.audit.push({event:'member-session-deleted',checkinId:c.id,profileId:who.id,day:c.day,at:c.deletedAt});
+    persist();
+    if (c.hasProof) {
+      try {fs.unlinkSync(path.join(PROOF_DIR,c.id+'.jpg'));} catch (err) {
+        if (err.code!=='ENOENT') console.warn('Could not remove deleted workout evidence',err.code);
+      }
+    }
+    return send(res,200,{ok:true});
   }
   const deleteSession=/^\/api\/admin\/checkins\/([a-f0-9-]+)\/delete$/.exec(uri);
   if (req.method === 'POST' && deleteSession) {

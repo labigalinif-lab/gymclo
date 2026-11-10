@@ -1,0 +1,31 @@
+{
+  "name": "Gymclo",
+  "short_name": "Gymclo",
+  "description": "Gymclo fitness tracker and crew challenge app",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "/icons/gymclo-g-20261109-v2-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/gymclo-g-20261109-v2-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/gymclo-g-20261109-v2-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "id": "/gymclo-install-v2"
+}
