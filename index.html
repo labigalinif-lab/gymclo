@@ -557,7 +557,7 @@ const isDoneWeek=(week,today)=>addDays(week,6)<today;
 let croppedAvatarData='',avatarCropState=null,avatarCropSourceUrl='',avatarCropPinch=null;
 const avatarCropLayer=document.querySelector('#avatar-crop-layer');
 let activeAdminTab='reviews';
-let approvedMonth='',adminCycle='',B=null,S=null,tab=(localStorage.getItem('gymclo_last_tab')||'home'),selectedWorkout='push',adminMonth='',forfeitView='',calendarMonth='',loading=false,formPhoto='',wallPhoto='',lastProof='',pin={id:'',mode:'enter',buf:'',first:'',claimCode:'',busy:false},selection=0,radioFilter='all',radioOpen=false,pendingNotifyCount=null;
+let approvedMonth='',adminCycle='',B=null,S=null,tab=(()=>{try{return localStorage.getItem('gymclo_last_tab')||'home'}catch{return 'home'}})(),selectedWorkout='push',adminMonth='',forfeitView='',calendarMonth='',loading=false,formPhoto='',wallPhoto='',lastProof='',pin={id:'',mode:'enter',buf:'',first:'',claimCode:'',busy:false},selection=0,radioFilter='all',radioOpen=false,pendingNotifyCount=null;
 const today=()=>S?.today||B?.today||new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const activeWeek=()=>monday(today());
 const activeMonth=()=>today().slice(0,7);

@@ -1,0 +1,6 @@
+Gymclo Medal Studio startup recovery.
+
+Fix: guard the first localStorage read so restrictive browser contexts cannot halt frontend JavaScript before boot().
+Retains medal studio, transparent images, session deletion, icon files, and existing backend.
+
+Deploy: copy server.js and the public folder contents to matching paths in GitHub; do not delete Railway /app/data.
